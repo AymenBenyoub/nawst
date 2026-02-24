@@ -2,7 +2,7 @@ package core
 
 import (
 	"path/filepath"
-	"runtime"
+
 	"testing"
 )
 
@@ -10,7 +10,7 @@ func TestPutGet(t *testing.T) {
 	dir := t.TempDir()
 	walPath := filepath.Join(dir, "wal.log")
 	wal, err := NewWal(walPath)
-	defer wal.file.Close()
+	defer wal.Close()
 	if err != nil {
 		t.Fatalf("failed to create wal : %v", err)
 	}
@@ -33,7 +33,7 @@ func TestDelete(t *testing.T) {
 	dir := t.TempDir()
 	walPath := filepath.Join(dir, "wal.log")
 	wal, err := NewWal(walPath)
-	defer wal.file.Close()
+	defer wal.Close()
 	if err != nil {
 		t.Fatalf("failed to create wal : %v", err)
 	}
@@ -56,12 +56,12 @@ func TestRecoverFromWAL(t *testing.T) {
 	{
 		wal, _ := NewWal(walPath)
 		store := NewStore(wal)
-	
+
 		_ = store.Put("a", []byte("100"))
 		_ = store.Put("b", []byte("200"))
 		_ = store.Delete("a")
 		wal.Close()
-			}
+	}
 
 	// recovery
 	{
