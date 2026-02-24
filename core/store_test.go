@@ -82,3 +82,24 @@ func TestRecoverFromWAL(t *testing.T) {
 		}
 	}
 }
+func TestByteCorrectnes(t *testing.T) {
+	dir := t.TempDir()
+	walPath := filepath.Join(dir, "wal.log")
+
+	wal, _ := NewWal(walPath)
+	store := NewStore(wal)
+	defer wal.Close()
+	val := []byte{0x00, 0xff, 0x10, 0x13, 0xA3, 0x7D, 0x42, 0x11, 0x99, 0xCC, 0x23}
+	_ = store.Put("binary-val", val)
+
+	v, _ := store.Get("binary-val")
+
+	if len(v) != len(val) {
+		t.Fatalf("length mismatch")
+	}
+	for i := range val {
+		if v[i] != val[i] {
+			t.Fatalf("byte mismatch at %d", i)
+		}
+	}
+}

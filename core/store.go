@@ -22,6 +22,11 @@ func NewStore(wal *Wal) *Store {
 	}
 }
 
+
+// writes to the WAL are sequential for now for simplicity & to get things going
+// a better implementation would be batching multiple entries together and fsyncing for each batch
+// might add later 
+
 func (s *Store) Put(key string, value []byte) error {
 
 	record := &WALRecord{
