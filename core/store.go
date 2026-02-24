@@ -6,14 +6,13 @@ import (
 	"fmt"
 	"io"
 	"slices"
-	
+
 	"time"
 )
 
 type Store struct {
 	storage map[string][]byte
-	wal    *Wal
-	
+	wal     *Wal
 }
 
 func NewStore(wal *Wal) *Store {
@@ -34,12 +33,12 @@ func (s *Store) Put(key string, value []byte) error {
 	if err := s.wal.Append(record); err != nil {
 		return fmt.Errorf("failed to write WAL record: %w", err)
 	}
-	s.storage[key] = value
+	s.storage[key] = slices.Clone(value)
 	return nil
 
 }
 func (s *Store) Get(key string) ([]byte, error) {
-		val, exists := s.storage[key]
+	val, exists := s.storage[key]
 	if !exists {
 		return nil, ErrKeyNotFound
 	}
@@ -78,6 +77,7 @@ func (s *Store) applyRecord(record *WALRecord) error {
 }
 
 func (s *Store) RecoverFromWAL() error {
+    s.storage = make(map[string][]byte) // clear in memory data before replaying WAL
 
 	// start from beginning of the WAL file, read each entry and apply to the store.
 	if _, err := s.wal.file.Seek(0, io.SeekStart); err != nil {
@@ -86,8 +86,8 @@ func (s *Store) RecoverFromWAL() error {
 	r := bufio.NewReader(s.wal.file)
 	for {
 		// read op (1 byte)
-		header := make([]byte, 1)
-		n, err := io.ReadFull(r, header)
+		header := [1]byte{}
+		n, err := io.ReadFull(r, header[:])
 		if err != nil {
 			if err == io.EOF {
 				// normal end of file --> success
@@ -140,11 +140,11 @@ func (s *Store) RecoverFromWAL() error {
 		}
 
 		//rread timestamp (fixed 8 bytes)
-		tsBytes := make([]byte, 8)
-		if _, err := io.ReadFull(r, tsBytes); err != nil {
+		tsBytes := [8]byte{}
+		if _, err := io.ReadFull(r, tsBytes[:]); err != nil {
 			return fmt.Errorf("read timestamp failed: %w", err)
 		}
-		ts := int64(binary.LittleEndian.Uint64(tsBytes))
+		ts := int64(binary.LittleEndian.Uint64(tsBytes[:]))
 
 		record := &WALRecord{
 			Op:    op,
@@ -152,7 +152,7 @@ func (s *Store) RecoverFromWAL() error {
 			Value: val,
 			Ts:    ts,
 		}
-		
+
 		if err := s.applyRecord(record); err != nil {
 			return fmt.Errorf("failed to apply WAL record: %w", err)
 		}

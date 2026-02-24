@@ -3,11 +3,10 @@ package core
 import (
 	"encoding/binary"
 	"os"
-	
 )
 
 type Wal struct {
-	file  *os.File
+	file *os.File
 }
 
 type WALRecord struct {
@@ -30,12 +29,12 @@ a single entry in the WAL will look like:
 
 const (
 	OpPut = 0
-	OpGet = 1
-	OpDelete = 2
+
+	OpDelete = 1
 )
 
 func NewWal(filepath string) (*Wal, error) {
-	f, err := os.OpenFile(filepath, os.O_RDWR|os.O_CREATE, 0644)
+	f, err := os.OpenFile(filepath, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0644)
 	if err != nil {
 		return nil, err
 	}
@@ -43,7 +42,7 @@ func NewWal(filepath string) (*Wal, error) {
 }
 
 func (w *Wal) Append(record *WALRecord) error {
-	
+
 	buf := make([]byte, 0, 64+len(record.Key)+len(record.Value))
 
 	// operation (1 byte)
@@ -56,9 +55,15 @@ func (w *Wal) Append(record *WALRecord) error {
 	buf = append(buf, record.Value...)                         // then the value bytes
 
 	// timestamp (8 bytes)
-	binary.LittleEndian.PutUint64(buf[len(buf):len(buf)+8], uint64(record.Ts))
-	buf = buf[:len(buf)+8]
+	tsBuf := make([]byte, 8)
+	binary.LittleEndian.PutUint64(tsBuf, uint64(record.Ts))
+	buf = append(buf, tsBuf...)
 
 	_, err := w.file.Write(buf)
+	//no fsync for now, less durable but much faster, can be added later if needed
 	return err
+}
+
+func (w *Wal) Close() error {
+	return w.file.Close()
 }
