@@ -3,12 +3,11 @@ package core
 import (
 	"encoding/binary"
 	"os"
-	"sync"
+	
 )
 
 type Wal struct {
 	file  *os.File
-	walMu sync.Mutex
 }
 
 type WALRecord struct {
@@ -30,10 +29,9 @@ a single entry in the WAL will look like:
 */
 
 const (
-	OpPut    = 0
-	OpGet    = 1
-	OpUpdate = 2
-	OpDelete = 3
+	OpPut = 0
+	OpGet = 1
+	OpDelete = 2
 )
 
 func NewWal(filepath string) (*Wal, error) {
@@ -41,18 +39,14 @@ func NewWal(filepath string) (*Wal, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &Wal{file: f, walMu: sync.Mutex{}}, nil
+	return &Wal{file: f}, nil
 }
 
-
-
 func (w *Wal) Append(record *WALRecord) error {
-	w.walMu.Lock()
-	defer w.walMu.Unlock()
-
+	
 	buf := make([]byte, 0, 64+len(record.Key)+len(record.Value))
 
-	// Op
+	// operation (1 byte)
 	buf = append(buf, byte(record.Op))
 
 	// varint lengths + kv data

@@ -7,5 +7,5 @@ var (
 	ErrKeyExists   = errors.New("key already exists")
 	ErrInvalidKey  = errors.New("invalid key")
 	ErrInvalidOperation = errors.New("invalid operation")
-	ErrWalWriteFailed = errors.New("WAL write failed")
+	
 )
