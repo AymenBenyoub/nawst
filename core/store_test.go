@@ -10,10 +10,11 @@ func TestPutGet(t *testing.T) {
 	dir := t.TempDir()
 	walPath := filepath.Join(dir, "wal.log")
 	wal, err := NewWal(walPath)
-	defer wal.Close()
+
 	if err != nil {
 		t.Fatalf("failed to create wal : %v", err)
 	}
+	defer wal.Close()
 	store := NewStore(wal)
 
 	key := "k1"
@@ -22,21 +23,24 @@ func TestPutGet(t *testing.T) {
 	if err := store.Put(key, value); err != nil {
 		t.Fatalf("put failed: %v", err)
 	}
-	if v, err := store.Get(key); err != nil {
+	v, err := store.Get(key)
+	if err != nil {
 		t.Fatalf("get failed: %v", err)
 	} else if string(v) != "orange" {
 		t.Fatalf("value mismatch: expected %s, got %s", "orange", v)
 	}
+
 }
 
 func TestDelete(t *testing.T) {
 	dir := t.TempDir()
 	walPath := filepath.Join(dir, "wal.log")
 	wal, err := NewWal(walPath)
-	defer wal.Close()
+
 	if err != nil {
 		t.Fatalf("failed to create wal : %v", err)
 	}
+	defer wal.Close()
 	store := NewStore(wal)
 
 	_ = store.Put("k1", []byte("orange"))
