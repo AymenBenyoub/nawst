@@ -22,10 +22,9 @@ func NewStore(wal *Wal) *Store {
 	}
 }
 
-
 // writes to the WAL are sequential for now for simplicity & to get things going
 // a better implementation would be batching multiple entries together and fsyncing for each batch
-// might add later 
+// might add later
 
 func (s *Store) Put(key string, value []byte) error {
 
@@ -70,10 +69,9 @@ func (s *Store) applyRecord(record *WALRecord) error {
 	switch record.Op {
 	case OpPut:
 		s.storage[string(record.Key)] = slices.Clone(record.Value)
-		break
+
 	case OpDelete:
 		delete(s.storage, string(record.Key))
-		break
 
 	default:
 		return ErrInvalidOperation
@@ -82,7 +80,7 @@ func (s *Store) applyRecord(record *WALRecord) error {
 }
 
 func (s *Store) RecoverFromWAL() error {
-    s.storage = make(map[string][]byte) // clear in memory data before replaying WAL
+	s.storage = make(map[string][]byte) // clear in memory data before replaying WAL
 
 	// start from beginning of the WAL file, read each entry and apply to the store.
 	if _, err := s.wal.file.Seek(0, io.SeekStart); err != nil {

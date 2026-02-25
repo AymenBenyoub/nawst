@@ -63,8 +63,10 @@ func TestRecoverFromWAL(t *testing.T) {
 
 		_ = store.Put("a", []byte("100"))
 		_ = store.Put("b", []byte("200"))
+		// t.Log("state 1: ",store.storage)
 		_ = store.Delete("a")
 		wal.Close()
+		// t.Log("state 2: ",store.storage)
 	}
 
 	// recovery
@@ -75,7 +77,7 @@ func TestRecoverFromWAL(t *testing.T) {
 		if err := store.RecoverFromWAL(); err != nil {
 			t.Fatalf("recovery failed: %v", err)
 		}
-
+		// t.Log("state 3: ",store.storage)
 		if _, err := store.Get("a"); err == nil {
 			t.Fatalf("expected 'a' to be deleted")
 		}
