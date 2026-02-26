@@ -15,6 +15,14 @@ type Store struct {
 	wal     *Wal
 }
 
+type Operation int
+
+const (
+	OpPut Operation = iota
+	OpGet
+	OpDelete
+)
+
 func NewStore(wal *Wal) *Store {
 	return &Store{
 		storage: make(map[string][]byte),
@@ -104,7 +112,7 @@ func (s *Store) RecoverFromWAL() error {
 		if n != 1 {
 			return fmt.Errorf("unexpected short read for op: %d bytes", n)
 		}
-		op := int(header[0])
+		op := Operation(header[0])
 
 		// read key length (varint)
 		keyLen64, err := binary.ReadUvarint(r)

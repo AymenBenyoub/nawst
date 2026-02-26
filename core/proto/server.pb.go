@@ -68,7 +68,7 @@ func (x *GetRequest) GetKey() string {
 type GetResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Found         bool                   `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`
-	Value         string                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	Value         []byte                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -110,17 +110,17 @@ func (x *GetResponse) GetFound() bool {
 	return false
 }
 
-func (x *GetResponse) GetValue() string {
+func (x *GetResponse) GetValue() []byte {
 	if x != nil {
 		return x.Value
 	}
-	return ""
+	return nil
 }
 
 type PutRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
-	Value         string                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	Value         []byte                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -162,11 +162,11 @@ func (x *PutRequest) GetKey() string {
 	return ""
 }
 
-func (x *PutRequest) GetValue() string {
+func (x *PutRequest) GetValue() []byte {
 	if x != nil {
 		return x.Value
 	}
-	return ""
+	return nil
 }
 
 type PutResponse struct {
@@ -303,17 +303,17 @@ const file_server_proto_rawDesc = "" +
 	"\x03key\x18\x01 \x01(\tR\x03key\"9\n" +
 	"\vGetResponse\x12\x14\n" +
 	"\x05found\x18\x01 \x01(\bR\x05found\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value\"4\n" +
+	"\x05value\x18\x02 \x01(\fR\x05value\"4\n" +
 	"\n" +
 	"PutRequest\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value\"\r\n" +
+	"\x05value\x18\x02 \x01(\fR\x05value\"\r\n" +
 	"\vPutResponse\"!\n" +
 	"\rDeleteRequest\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\"*\n" +
 	"\x0eDeleteResponse\x12\x18\n" +
-	"\aexisted\x18\x01 \x01(\bR\aexisted2\x9d\x01\n" +
-	"\bKVServer\x12,\n" +
+	"\aexisted\x18\x01 \x01(\bR\aexisted2\x97\x01\n" +
+	"\x02KV\x12,\n" +
 	"\x03Get\x12\x11.proto.GetRequest\x1a\x12.proto.GetResponse\x12,\n" +
 	"\x03Put\x12\x11.proto.PutRequest\x1a\x12.proto.PutResponse\x125\n" +
 	"\x06Delete\x12\x14.proto.DeleteRequest\x1a\x15.proto.DeleteResponseB*Z(github.com/AymenBenyoub/nawst/core/protob\x06proto3"
@@ -340,12 +340,12 @@ var file_server_proto_goTypes = []any{
 	(*DeleteResponse)(nil), // 5: proto.DeleteResponse
 }
 var file_server_proto_depIdxs = []int32{
-	0, // 0: proto.KVServer.Get:input_type -> proto.GetRequest
-	2, // 1: proto.KVServer.Put:input_type -> proto.PutRequest
-	4, // 2: proto.KVServer.Delete:input_type -> proto.DeleteRequest
-	1, // 3: proto.KVServer.Get:output_type -> proto.GetResponse
-	3, // 4: proto.KVServer.Put:output_type -> proto.PutResponse
-	5, // 5: proto.KVServer.Delete:output_type -> proto.DeleteResponse
+	0, // 0: proto.KV.Get:input_type -> proto.GetRequest
+	2, // 1: proto.KV.Put:input_type -> proto.PutRequest
+	4, // 2: proto.KV.Delete:input_type -> proto.DeleteRequest
+	1, // 3: proto.KV.Get:output_type -> proto.GetResponse
+	3, // 4: proto.KV.Put:output_type -> proto.PutResponse
+	5, // 5: proto.KV.Delete:output_type -> proto.DeleteResponse
 	3, // [3:6] is the sub-list for method output_type
 	0, // [0:3] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name

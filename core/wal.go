@@ -10,7 +10,7 @@ type Wal struct {
 }
 
 type WALRecord struct {
-	Op    int    // 1 byte
+	Op    Operation    // 1 byte
 	Key   []byte // varint length prefix + key bytes
 	Value []byte //var int length prefix + value bytes
 	Ts    int64  // 8 bytes for the timestamp
@@ -27,11 +27,7 @@ a single entry in the WAL will look like:
 	[timestamp (8 bytes)]
 */
 
-const (
-	OpPut = 0
 
-	OpDelete = 1
-)
 
 func NewWal(filepath string) (*Wal, error) {
 	f, err := os.OpenFile(filepath, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
