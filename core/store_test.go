@@ -88,7 +88,7 @@ func TestRecoverFromWAL(t *testing.T) {
 		}
 	}
 }
-func TestByteCorrectnes(t *testing.T) {
+func TestByteCorrectness(t *testing.T) {
 	dir := t.TempDir()
 	walPath := filepath.Join(dir, "wal.log")
 
