@@ -82,7 +82,7 @@ func (w *Wal) writerLoop() {
 	defer ticker.Stop()
 
 	var pending []walEntry
-
+	maxBatchSize := 512
 	flush := func(doSync bool) {
 		if len(pending) == 0 {
 			return
@@ -106,7 +106,9 @@ func (w *Wal) writerLoop() {
 				panic(err)
 			}
 			pending = append(pending, e)
-
+			if len(pending) >= maxBatchSize {
+				flush(w.ackMode == AckAfterFlush || w.ackMode == AckAfterFsync)
+			}
 		case <-ticker.C:
 			for {
 				select {
