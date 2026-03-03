@@ -16,7 +16,7 @@ message GetRequest {
 
 message GetResponse {
    
-    bytes value = 2;
+    bytes value = 1;
 }
 
 message PutRequest {

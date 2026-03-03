@@ -172,8 +172,11 @@ func ReplayWal(path string, apply func(Command) error) error {
 
 	for {
 		op, err := r.ReadByte()
-		if err != nil {
+		if err == io.EOF {
 			return nil
+		}
+		if err != nil {
+			return err
 		}
 
 		keyLen, err := binary.ReadUvarint(r)
@@ -184,7 +187,7 @@ func ReplayWal(path string, apply func(Command) error) error {
 			return err
 		}
 		key := make([]byte, keyLen)
-		if _, err := r.Read(key); err != nil {
+		if _, err := io.ReadFull(r, key); err != nil {
 			return err
 		}
 
@@ -196,7 +199,7 @@ func ReplayWal(path string, apply func(Command) error) error {
 			return err
 		}
 		val := make([]byte, valLen)
-		if _, err := r.Read(val); err != nil {
+		if _, err := io.ReadFull(r, val); err != nil {
 			return err
 		}
 

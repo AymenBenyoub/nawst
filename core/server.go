@@ -3,17 +3,18 @@ package core
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"net"
 	"os"
 	"os/signal"
 	"strconv"
 	"syscall"
-	
 
 	pb "github.com/AymenBenyoub/nawst/core/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -52,7 +53,7 @@ func (s *Server) Start(port int) error {
 
 	grpcServer := grpc.NewServer()
 	pb.RegisterKVServer(grpcServer, s)
-
+	reflection.Register(grpcServer)
 	// clean shutdown on SIGINT/SIGTERM
 	stopCh := make(chan os.Signal, 1)
 	signal.Notify(stopCh, syscall.SIGINT, syscall.SIGTERM)
@@ -66,7 +67,6 @@ func (s *Server) Start(port int) error {
 	log.Printf("gRPC server listening on port %d\n", port)
 	return grpcServer.Serve(lis)
 }
-
 
 func (s *Server) sendRequest(ctx context.Context, req Request) Response {
 	select {
@@ -86,11 +86,12 @@ func (s *Server) sendRequest(ctx context.Context, req Request) Response {
 
 // gRPC Put RPC
 func (s *Server) Put(ctx context.Context, req *pb.PutRequest) (*emptypb.Empty, error) {
+	fmt.Println("RPC Put value length:", len(req.Value), "bytes:", req.Value)
 	resp := s.sendRequest(ctx, Request{
 		Op:           OpPut,
 		Key:          req.Key,
 		Value:        req.Value,
-		ResponseChan: make(chan Response, 1), 
+		ResponseChan: make(chan Response, 1),
 	})
 	if resp.Err != nil {
 		return nil, status.Errorf(codes.Internal, "Failed to put key: %v", resp.Err)

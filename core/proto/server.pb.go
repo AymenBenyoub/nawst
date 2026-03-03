@@ -68,7 +68,7 @@ func (x *GetRequest) GetKey() string {
 
 type GetResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Value         []byte                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
+	Value         []byte                 `protobuf:"bytes,1,opt,name=value,proto3" json:"value,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -215,7 +215,7 @@ const file_server_proto_rawDesc = "" +
 	"GetRequest\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\"#\n" +
 	"\vGetResponse\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\fR\x05value\"4\n" +
+	"\x05value\x18\x01 \x01(\fR\x05value\"4\n" +
 	"\n" +
 	"PutRequest\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +

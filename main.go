@@ -4,14 +4,41 @@
 
 // main.go: entry point for the application
 
-package main 
+package main
 
-import "fmt"
+import (
+	"flag"
 
+	"github.com/AymenBenyoub/nawst/core"
+)
 
+var port = flag.Int("port", 9999, "server port")
 
+func main() {
+	flag.Parse()
+	store := core.NewStore()
+	err := core.ReplayWal("ops.wal", store.Apply)
+	if err != nil {
+		panic(err)
+	}
+	wal, err := core.NewWal("ops.wal", 1024, core.AckAfterFlush)
 
-func main(){
+	if err != nil {
+		panic(err)
+	}
+	defer wal.Close()
 
-	fmt.Println("Application started...")
+	reqCh := make(chan core.Request, 1024)
+	eventLoop := &core.EventLoop{
+		Store: store,
+		Wal:   wal,
+		ReqCh: reqCh,
+	}
+	go eventLoop.Run()
+
+	server := core.NewServer(reqCh)
+	if err := server.Start(*port); err != nil {
+		panic(err)
+	}
+
 }
