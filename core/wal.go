@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"sync"
@@ -89,9 +90,13 @@ func (w *Wal) writerLoop() {
 			return
 		}
 
-		_ = w.writer.Flush()
+		if err := w.writer.Flush(); err != nil {
+			fmt.Fprintf(os.Stderr, "Flush error: %v\n", err)
+		}
 		if doSync {
-			_ = w.file.Sync()
+			if err := w.file.Sync(); err != nil {
+				fmt.Fprintf(os.Stderr, "Fsync error: %v\n", err)
+			}
 		}
 
 		for _, e := range pending {
@@ -104,7 +109,10 @@ func (w *Wal) writerLoop() {
 		select {
 		case e := <-w.appendCh:
 			if err := w.writeCommand(e.cmd); err != nil {
-				panic(err)
+				// log and mark the entry as failed
+				fmt.Fprintf(os.Stderr, "WAL write failed: %v\n", err)
+				close(e.done) // still close so the caller doesn't block forever
+				continue
 			}
 			pending = append(pending, e)
 			if len(pending) >= maxBatchSize {
