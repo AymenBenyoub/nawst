@@ -2,60 +2,127 @@ package core
 
 import (
 	"context"
-	"flag"
+	"errors"
 	"log"
 	"net"
+	"os"
+	"os/signal"
 	"strconv"
+	"syscall"
+	
 
 	pb "github.com/AymenBenyoub/nawst/core/proto"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/emptypb"
 )
-
-//  gRPC server process for the kv store, handles rpc calls and forwards them to the event loop for
-// processing, should contain purely transport logic.
 
 type Server struct {
 	pb.UnimplementedKVServer
 	reqCh chan<- Request
 }
+
 type Request struct {
-	Op           int // 0 put, 1 delete, see Operation type in store.go
+	Op           OpType
 	Key          string
 	Value        []byte
 	ResponseChan chan Response
 }
+
 type Response struct {
 	Exists bool
 	Value  []byte
 	Err    error
 }
 
+// NewServer returns a server using the given event loop request channel
 func NewServer(reqCh chan<- Request) *Server {
 	return &Server{
 		reqCh: reqCh,
 	}
 }
 
-var (
-	port = flag.Int("port", 50051, "The server port")
-)
-
-func (s *Server) Start() {
-	flag.Parse()
-	listener, err := net.Listen("tcp", ":"+strconv.Itoa(*port))
+// Start listens on the given port and runs the gRPC server
+func (s *Server) Start(port int) error {
+	lis, err := net.Listen("tcp", ":"+strconv.Itoa(port))
 	if err != nil {
-		log.Fatalf("Failed to listen on port %d: %v", *port, err)
+		return err
 	}
-	server := grpc.NewServer()
-	reqCh := make(chan<- Request, 1024)
-	pb.RegisterKVServer(server, NewServer(reqCh))
-	if err := server.Serve(listener); err != nil {
-		log.Fatalf("Failed to serve: %v", err)
-	}
-	log.Println("Server started on port", *port)
 
+	grpcServer := grpc.NewServer()
+	pb.RegisterKVServer(grpcServer, s)
+
+	// clean shutdown on SIGINT/SIGTERM
+	stopCh := make(chan os.Signal, 1)
+	signal.Notify(stopCh, syscall.SIGINT, syscall.SIGTERM)
+
+	go func() {
+		<-stopCh
+		log.Println("Shutting down gRPC server...")
+		grpcServer.GracefulStop()
+	}()
+
+	log.Printf("gRPC server listening on port %d\n", port)
+	return grpcServer.Serve(lis)
 }
 
-func (s *Server) Put(ctx context.Context, req *pb.PutRequest) (*pb.PutResponse, error)          {}
-func (s *Server) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, error)          {}
-func (s *Server) Delete(ctx context.Context, req *pb.DeleteRequest) (*pb.DeleteResponse, error) {}
+
+func (s *Server) sendRequest(ctx context.Context, req Request) Response {
+	select {
+	case s.reqCh <- req:
+		// sent to event loop
+	case <-ctx.Done():
+		return Response{Err: status.Error(codes.DeadlineExceeded, "request cancelled")}
+	}
+
+	select {
+	case resp := <-req.ResponseChan:
+		return resp
+	case <-ctx.Done():
+		return Response{Err: status.Error(codes.DeadlineExceeded, "request cancelled")}
+	}
+}
+
+// gRPC Put RPC
+func (s *Server) Put(ctx context.Context, req *pb.PutRequest) (*emptypb.Empty, error) {
+	resp := s.sendRequest(ctx, Request{
+		Op:           OpPut,
+		Key:          req.Key,
+		Value:        req.Value,
+		ResponseChan: make(chan Response, 1), 
+	})
+	if resp.Err != nil {
+		return nil, status.Errorf(codes.Internal, "Failed to put key: %v", resp.Err)
+	}
+	return &emptypb.Empty{}, nil
+}
+
+// gRPC Get RPC
+func (s *Server) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, error) {
+	resp := s.sendRequest(ctx, Request{
+		Op:           OpGet,
+		Key:          req.Key,
+		ResponseChan: make(chan Response, 1),
+	})
+	if resp.Err != nil {
+		if errors.Is(resp.Err, ErrKeyNotFound) {
+			return nil, status.Error(codes.NotFound, "Key not found")
+		}
+		return nil, status.Errorf(codes.Internal, "Failed to get key: %v", resp.Err)
+	}
+	return &pb.GetResponse{Value: resp.Value}, nil
+}
+
+// gRPC Delete RPC
+func (s *Server) Delete(ctx context.Context, req *pb.DeleteRequest) (*emptypb.Empty, error) {
+	resp := s.sendRequest(ctx, Request{
+		Op:           OpDelete,
+		Key:          req.Key,
+		ResponseChan: make(chan Response, 1),
+	})
+	if resp.Err != nil {
+		return nil, status.Errorf(codes.Internal, "Failed to delete key: %v", resp.Err)
+	}
+	return &emptypb.Empty{}, nil
+}

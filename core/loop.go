@@ -1,23 +1,16 @@
 package core
 
-// the main event loop for the kv store, reads client requests from a channel
-// (which comes from the grpc server) and calls the relevant store methods.
-// writes the WAL entries into a buffers before calling the store methods, which will be written to disk
-// in batches asynchronously by another routine.
-// note that the log order is defined before the memory write. and that its sequential and single
-// threaded.
 type EventLoop struct {
-	Store   *Store
-	ReqChan <-chan Request
-	Wal     *Wal
-	AckMode AckMode
+	Store *Store
+	Wal   *Wal
+	ReqCh <-chan Request
 }
 
 type OpType uint8
-type AckMode uint8
 
 const (
 	OpPut OpType = iota
+	OpGet
 	OpDelete
 )
 
@@ -28,25 +21,38 @@ type Command struct {
 }
 
 func (el *EventLoop) Run() {
-
-	for {
-		req := <-el.ReqChan
-		el.HandleRequest(req)
-
+	for req := range el.ReqCh {
+		el.handle(req)
 	}
 }
 
-func (el *EventLoop) HandleRequest(req Request) {
+func (el *EventLoop) handle(req Request) {
 	switch req.Op {
-	case 0:
-		err := el.Store.Put(req.Key, req.Value)
+
+	case OpPut:
+		cmd := Command{Op: OpPut, Key: req.Key, Value: req.Value}
+		done, err := el.Wal.Append(cmd)
+		if err != nil {
+			req.ResponseChan <- Response{Err: err}
+			return
+		}
+		<-done
+		err = el.Store.Apply(cmd)
 		req.ResponseChan <- Response{Err: err}
-	case 1:
+
+	case OpDelete:
+		cmd := Command{Op: OpDelete, Key: req.Key}
+		done, err := el.Wal.Append(cmd)
+		if err != nil {
+			req.ResponseChan <- Response{Err: err}
+			return
+		}
+		<-done
+		err = el.Store.Apply(cmd)
+		req.ResponseChan <- Response{Err: err}
+
+	case OpGet:
 		val, err := el.Store.Get(req.Key)
 		req.ResponseChan <- Response{Value: val, Err: err}
-	case 2:
-		err := el.Store.Delete(req.Key)
-		req.ResponseChan <- Response{Err: err}
 	}
-
 }

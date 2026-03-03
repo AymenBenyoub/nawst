@@ -9,6 +9,7 @@ package proto
 import (
 	protoreflect "google.golang.org/protobuf/reflect/protoreflect"
 	protoimpl "google.golang.org/protobuf/runtime/protoimpl"
+	emptypb "google.golang.org/protobuf/types/known/emptypb"
 	reflect "reflect"
 	sync "sync"
 	unsafe "unsafe"
@@ -67,7 +68,6 @@ func (x *GetRequest) GetKey() string {
 
 type GetResponse struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
-	Found         bool                   `protobuf:"varint,1,opt,name=found,proto3" json:"found,omitempty"`
 	Value         []byte                 `protobuf:"bytes,2,opt,name=value,proto3" json:"value,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -101,13 +101,6 @@ func (x *GetResponse) ProtoReflect() protoreflect.Message {
 // Deprecated: Use GetResponse.ProtoReflect.Descriptor instead.
 func (*GetResponse) Descriptor() ([]byte, []int) {
 	return file_server_proto_rawDescGZIP(), []int{1}
-}
-
-func (x *GetResponse) GetFound() bool {
-	if x != nil {
-		return x.Found
-	}
-	return false
 }
 
 func (x *GetResponse) GetValue() []byte {
@@ -169,42 +162,6 @@ func (x *PutRequest) GetValue() []byte {
 	return nil
 }
 
-type PutResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *PutResponse) Reset() {
-	*x = PutResponse{}
-	mi := &file_server_proto_msgTypes[3]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *PutResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*PutResponse) ProtoMessage() {}
-
-func (x *PutResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_server_proto_msgTypes[3]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use PutResponse.ProtoReflect.Descriptor instead.
-func (*PutResponse) Descriptor() ([]byte, []int) {
-	return file_server_proto_rawDescGZIP(), []int{3}
-}
-
 type DeleteRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Key           string                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
@@ -214,7 +171,7 @@ type DeleteRequest struct {
 
 func (x *DeleteRequest) Reset() {
 	*x = DeleteRequest{}
-	mi := &file_server_proto_msgTypes[4]
+	mi := &file_server_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -226,7 +183,7 @@ func (x *DeleteRequest) String() string {
 func (*DeleteRequest) ProtoMessage() {}
 
 func (x *DeleteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_server_proto_msgTypes[4]
+	mi := &file_server_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -239,7 +196,7 @@ func (x *DeleteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteRequest.ProtoReflect.Descriptor instead.
 func (*DeleteRequest) Descriptor() ([]byte, []int) {
-	return file_server_proto_rawDescGZIP(), []int{4}
+	return file_server_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *DeleteRequest) GetKey() string {
@@ -249,74 +206,26 @@ func (x *DeleteRequest) GetKey() string {
 	return ""
 }
 
-type DeleteResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Existed       bool                   `protobuf:"varint,1,opt,name=existed,proto3" json:"existed,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *DeleteResponse) Reset() {
-	*x = DeleteResponse{}
-	mi := &file_server_proto_msgTypes[5]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *DeleteResponse) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*DeleteResponse) ProtoMessage() {}
-
-func (x *DeleteResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_server_proto_msgTypes[5]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use DeleteResponse.ProtoReflect.Descriptor instead.
-func (*DeleteResponse) Descriptor() ([]byte, []int) {
-	return file_server_proto_rawDescGZIP(), []int{5}
-}
-
-func (x *DeleteResponse) GetExisted() bool {
-	if x != nil {
-		return x.Existed
-	}
-	return false
-}
-
 var File_server_proto protoreflect.FileDescriptor
 
 const file_server_proto_rawDesc = "" +
 	"\n" +
-	"\fserver.proto\x12\x05proto\"\x1e\n" +
+	"\fserver.proto\x12\x05proto\x1a\x1bgoogle/protobuf/empty.proto\"\x1e\n" +
 	"\n" +
 	"GetRequest\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\"9\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key\"#\n" +
 	"\vGetResponse\x12\x14\n" +
-	"\x05found\x18\x01 \x01(\bR\x05found\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\fR\x05value\"4\n" +
 	"\n" +
 	"PutRequest\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\fR\x05value\"\r\n" +
-	"\vPutResponse\"!\n" +
+	"\x05value\x18\x02 \x01(\fR\x05value\"!\n" +
 	"\rDeleteRequest\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\tR\x03key\"*\n" +
-	"\x0eDeleteResponse\x12\x18\n" +
-	"\aexisted\x18\x01 \x01(\bR\aexisted2\x97\x01\n" +
+	"\x03key\x18\x01 \x01(\tR\x03key2\x9c\x01\n" +
 	"\x02KV\x12,\n" +
-	"\x03Get\x12\x11.proto.GetRequest\x1a\x12.proto.GetResponse\x12,\n" +
-	"\x03Put\x12\x11.proto.PutRequest\x1a\x12.proto.PutResponse\x125\n" +
-	"\x06Delete\x12\x14.proto.DeleteRequest\x1a\x15.proto.DeleteResponseB*Z(github.com/AymenBenyoub/nawst/core/protob\x06proto3"
+	"\x03Get\x12\x11.proto.GetRequest\x1a\x12.proto.GetResponse\x120\n" +
+	"\x03Put\x12\x11.proto.PutRequest\x1a\x16.google.protobuf.Empty\x126\n" +
+	"\x06Delete\x12\x14.proto.DeleteRequest\x1a\x16.google.protobuf.EmptyB*Z(github.com/AymenBenyoub/nawst/core/protob\x06proto3"
 
 var (
 	file_server_proto_rawDescOnce sync.Once
@@ -330,22 +239,21 @@ func file_server_proto_rawDescGZIP() []byte {
 	return file_server_proto_rawDescData
 }
 
-var file_server_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
+var file_server_proto_msgTypes = make([]protoimpl.MessageInfo, 4)
 var file_server_proto_goTypes = []any{
-	(*GetRequest)(nil),     // 0: proto.GetRequest
-	(*GetResponse)(nil),    // 1: proto.GetResponse
-	(*PutRequest)(nil),     // 2: proto.PutRequest
-	(*PutResponse)(nil),    // 3: proto.PutResponse
-	(*DeleteRequest)(nil),  // 4: proto.DeleteRequest
-	(*DeleteResponse)(nil), // 5: proto.DeleteResponse
+	(*GetRequest)(nil),    // 0: proto.GetRequest
+	(*GetResponse)(nil),   // 1: proto.GetResponse
+	(*PutRequest)(nil),    // 2: proto.PutRequest
+	(*DeleteRequest)(nil), // 3: proto.DeleteRequest
+	(*emptypb.Empty)(nil), // 4: google.protobuf.Empty
 }
 var file_server_proto_depIdxs = []int32{
 	0, // 0: proto.KV.Get:input_type -> proto.GetRequest
 	2, // 1: proto.KV.Put:input_type -> proto.PutRequest
-	4, // 2: proto.KV.Delete:input_type -> proto.DeleteRequest
+	3, // 2: proto.KV.Delete:input_type -> proto.DeleteRequest
 	1, // 3: proto.KV.Get:output_type -> proto.GetResponse
-	3, // 4: proto.KV.Put:output_type -> proto.PutResponse
-	5, // 5: proto.KV.Delete:output_type -> proto.DeleteResponse
+	4, // 4: proto.KV.Put:output_type -> google.protobuf.Empty
+	4, // 5: proto.KV.Delete:output_type -> google.protobuf.Empty
 	3, // [3:6] is the sub-list for method output_type
 	0, // [0:3] is the sub-list for method input_type
 	0, // [0:0] is the sub-list for extension type_name
@@ -364,7 +272,7 @@ func file_server_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_server_proto_rawDesc), len(file_server_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   6,
+			NumMessages:   4,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

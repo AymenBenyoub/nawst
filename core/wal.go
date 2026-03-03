@@ -3,42 +3,41 @@ package core
 import (
 	"bufio"
 	"encoding/binary"
-	"fmt"
-	"io"
+	"errors"
 	"os"
 	"sync"
 	"time"
 )
 
+type AckMode uint8
 
+const (
+	AckAfterEnqueue AckMode = iota // fastest, weakest
+	AckAfterFlush                  // flushed to OS
+	AckAfterFsync                  // durable
+)
 
-//  the WAL should :
-//   1- own the log file
-//   2- serialize commands
-//   3- buffer and batch writes
-//   4- guarantee write order
-//   5- replay commands in order
-
-type Wal struct {
-	file   *os.File      
-	writer *bufio.Writer // buffered writer for batching
-
-	appendCh chan Command // in-memory queue for log entries
-	closeCh  chan struct{} //signals the writer to flush and exit
-
-	wg sync.WaitGroup // waits for writer goroutine to exit
+type walEntry struct {
+	cmd  Command
+	done chan struct{} // closed when durability boundary is reached
 }
 
-// NewWal opens (or creates) a WAL file and starts the writer goroutine.
-//
-// bufferSize controls how much data is buffered before flushing to disk.
-// bigger buffer = higher throughput, lower durability.
-func NewWal(path string, bufferSize int) (*Wal, error) {
-	f, err := os.OpenFile(
-		path,
-		os.O_RDWR|os.O_CREATE|os.O_APPEND,
-		0644,
-	)
+type Wal struct {
+	file   *os.File
+	writer *bufio.Writer
+
+	appendCh chan walEntry
+	closeCh  chan struct{}
+
+	ackMode AckMode
+
+	wg sync.WaitGroup
+}
+
+// NewWal opens the WAL and starts the writer goroutine.
+// Replay MUST be done before calling this.
+func NewWal(path string, bufferSize int, ackMode AckMode) (*Wal, error) {
+	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
 	if err != nil {
 		return nil, err
 	}
@@ -46,183 +45,162 @@ func NewWal(path string, bufferSize int) (*Wal, error) {
 	w := &Wal{
 		file:     f,
 		writer:   bufio.NewWriterSize(f, bufferSize),
-		appendCh: make(chan Command, 1024), 
-		closeCh:  make(chan struct{}), 
+		appendCh: make(chan walEntry, 1024),
+		closeCh:  make(chan struct{}),
+		ackMode:  ackMode,
 	}
 
-	
 	w.wg.Add(1)
 	go w.writerLoop()
 
 	return w, nil
 }
 
-// Append enqueues a command to be written to the WAL.
-//
-// This does NOT write to disk directly.
-// It only guarantees:
-//   - ordering
-//   - that the command is accepted by the WAL
-func (w *Wal) Append(cmd Command) error {
+// Append enqueues a command and returns a channel that will be closed
+// once the configured durability level is reached.
+func (w *Wal) Append(cmd Command) (<-chan struct{}, error) {
+	entry := walEntry{
+		cmd:  cmd,
+		done: make(chan struct{}),
+	}
+
 	select {
-	case w.appendCh <- cmd:
-		return nil
+	case w.appendCh <- entry:
+		if w.ackMode == AckAfterEnqueue {
+			close(entry.done)
+		}
+		return entry.done, nil
 	case <-w.closeCh:
-		return fmt.Errorf("wal is closed")
+		return nil, errors.New("wal is closed")
 	}
 }
 
-// writerLoop is the only goroutine that ever writes to the WAL file.
-//
-// It:
-//   - serializes commands
-//   - batches writes via bufio.Writer
-//   - flushes periodically or on shutdown
 func (w *Wal) writerLoop() {
 	defer w.wg.Done()
 
-	// periodic flush timer (time-based batching)
-	ticker := time.NewTicker(1000 * time.Millisecond)
+	ticker := time.NewTicker(200 * time.Millisecond)
 	defer ticker.Stop()
+
+	var pending []walEntry
+
+	flush := func(doSync bool) {
+		if len(pending) == 0 {
+			return
+		}
+
+		_ = w.writer.Flush()
+		if doSync {
+			_ = w.file.Sync()
+		}
+
+		for _, e := range pending {
+			close(e.done)
+		}
+		pending = pending[:0]
+	}
 
 	for {
 		select {
-		case cmd := <-w.appendCh:
-			if err := w.writeCommand(cmd); err != nil {
-				// for now: crash hard, later on MYBE i'll add retry logic or something similar
-			
+		case e := <-w.appendCh:
+			if err := w.writeCommand(e.cmd); err != nil {
 				panic(err)
 			}
+			pending = append(pending, e)
 
 		case <-ticker.C:
-			_ = w.writer.Flush()
-
-		case <-w.closeCh:
-			// drain remaining commands before closing
 			for {
 				select {
-				case cmd := <-w.appendCh:
-					_ = w.writeCommand(cmd)
+				// in case new entries arrived after the ticker ticked, include them in same batch
+				// instead of waiting for the next tick.
+				case e := <-w.appendCh:
+					w.writeCommand(e.cmd)
+					pending = append(pending, e)
 				default:
-					_ = w.writer.Flush()
-					return
+					goto done
 				}
 			}
+		done:
+			flush(w.ackMode == AckAfterFsync || w.ackMode == AckAfterFlush)
+
+		case <-w.closeCh:
+			flush(true)
+			return
 		}
 	}
 }
 
-// writeCommand ; serializes a 'Command' into the WAL format.
-//
-// 
-//  an entry looks like:
-
-//	[op:1]
-//	[keyLen:varint][key bytes]
-//	[valLen:varint][value bytes]
-//	[timestamp:8]
 func (w *Wal) writeCommand(cmd Command) error {
-	var lengthBuffer [binary.MaxVarintLen64]byte
+	var buf [binary.MaxVarintLen64]byte
 
-	// operation
 	if err := w.writer.WriteByte(byte(cmd.Op)); err != nil {
 		return err
 	}
 
-	// key
-	keyBytes := []byte(cmd.Key)
-	n := binary.PutUvarint(lengthBuffer[:], uint64(len(keyBytes)))
-	if _, err := w.writer.Write(lengthBuffer[:n]); err != nil {
+	key := []byte(cmd.Key)
+	n := binary.PutUvarint(buf[:], uint64(len(key)))
+	if _, err := w.writer.Write(buf[:n]); err != nil {
 		return err
 	}
-	if _, err := w.writer.Write(keyBytes); err != nil {
+	if _, err := w.writer.Write(key); err != nil {
 		return err
 	}
 
-	// value
-	n = binary.PutUvarint(lengthBuffer[:], uint64(len(cmd.Value)))
-	if _, err := w.writer.Write(lengthBuffer[:n]); err != nil {
+	n = binary.PutUvarint(buf[:], uint64(len(cmd.Value)))
+	if _, err := w.writer.Write(buf[:n]); err != nil {
 		return err
 	}
 	if _, err := w.writer.Write(cmd.Value); err != nil {
 		return err
 	}
 
-	// timestamp
 	ts := time.Now().UnixNano()
-	if err := binary.Write(w.writer, binary.LittleEndian, ts); err != nil {
-		return err
-	}
-
-	return nil
+	return binary.Write(w.writer, binary.LittleEndian, ts)
 }
 
-// Replay reads the WAL from the beginning and invokes apply(cmd)
-// for each decoded command, in order.
-// it doesnt buffer or mutate the data in any way.!
-
-func (w *Wal) Replay(apply func(Command) error) error {
-	if _, err := w.file.Seek(0, io.SeekStart); err != nil {
+// MUST be called before NewWal starts the writer goroutine.
+func ReplayWal(path string, apply func(Command) error) error {
+	f, err := os.Open(path)
+	if err != nil {
 		return err
 	}
+	defer f.Close()
 
-	r := bufio.NewReader(w.file)
+	r := bufio.NewReader(f)
 
 	for {
-		// op
 		op, err := r.ReadByte()
-		if err == io.EOF {
+		if err != nil {
 			return nil
 		}
-		if err != nil {
-			return err
-		}
 
-		// key
-		keyLen, err := binary.ReadUvarint(r)
-		if err != nil {
-			return err
-		}
+		keyLen, _ := binary.ReadUvarint(r)
 		key := make([]byte, keyLen)
-		if _, err := io.ReadFull(r, key); err != nil {
+		if _, err := r.Read(key); err != nil {
 			return err
 		}
 
-		// value
-		valLen, err := binary.ReadUvarint(r)
-		if err != nil {
-			return err
-		}
+		valLen, _ := binary.ReadUvarint(r)
 		val := make([]byte, valLen)
-		if _, err := io.ReadFull(r, val); err != nil {
+		if _, err := r.Read(val); err != nil {
 			return err
 		}
 
-		// timestamp (unused for now)
 		var ts int64
-		if err := binary.Read(r, binary.LittleEndian, &ts); err != nil {
-			return err
-		}
+		_ = binary.Read(r, binary.LittleEndian, &ts)
 
-		cmd := Command{
-			Op:    Operation(op),
+		if err := apply(Command{
+			Op:    OpType(op),
 			Key:   string(key),
 			Value: val,
-		}
-
-		if err := apply(cmd); err != nil {
+		}); err != nil {
 			return err
 		}
 	}
 }
 
-// close the WAL cleanly, ensuring all buffered data is flushed.
 func (w *Wal) Close() error {
 	close(w.closeCh)
 	w.wg.Wait()
-
-	if err := w.writer.Flush(); err != nil {
-		return err
-	}
+	_ = w.writer.Flush()
 	return w.file.Close()
 }
