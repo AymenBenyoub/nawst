@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/binary"
 	"errors"
+	"io"
 	"os"
 	"sync"
 	"time"
@@ -175,20 +176,38 @@ func ReplayWal(path string, apply func(Command) error) error {
 			return nil
 		}
 
-		keyLen, _ := binary.ReadUvarint(r)
+		keyLen, err := binary.ReadUvarint(r)
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
 		key := make([]byte, keyLen)
 		if _, err := r.Read(key); err != nil {
 			return err
 		}
 
-		valLen, _ := binary.ReadUvarint(r)
+		valLen, err := binary.ReadUvarint(r)
+		if err != nil {
+			if err == io.EOF {
+				return nil
+			}
+			return err
+		}
 		val := make([]byte, valLen)
 		if _, err := r.Read(val); err != nil {
 			return err
 		}
 
 		var ts int64
-		_ = binary.Read(r, binary.LittleEndian, &ts)
+		errr := binary.Read(r, binary.LittleEndian, &ts)
+		if errr != nil {
+			if errr == io.EOF {
+				return nil
+			}
+			return errr
+		}
 
 		if err := apply(Command{
 			Op:    OpType(op),
