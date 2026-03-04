@@ -86,7 +86,7 @@ func (s *Server) sendRequest(ctx context.Context, req Request) Response {
 
 // gRPC Put RPC
 func (s *Server) Put(ctx context.Context, req *pb.PutRequest) (*emptypb.Empty, error) {
-	fmt.Println("RPC Put value length:", len(req.Value), "bytes:", req.Value)
+	fmt.Printf("RPC Put %s length: %d val: %v", req.Key, len(req.Value), string(req.Value))
 	resp := s.sendRequest(ctx, Request{
 		Op:           OpPut,
 		Key:          req.Key,
@@ -101,6 +101,7 @@ func (s *Server) Put(ctx context.Context, req *pb.PutRequest) (*emptypb.Empty, e
 
 // gRPC Get RPC
 func (s *Server) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, error) {
+	
 	resp := s.sendRequest(ctx, Request{
 		Op:           OpGet,
 		Key:          req.Key,
@@ -112,11 +113,13 @@ func (s *Server) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, 
 		}
 		return nil, status.Errorf(codes.Internal, "Failed to get key: %v", resp.Err)
 	}
+	fmt.Printf("RPC Get %s length: %d val: %v", req.Key, len(resp.Value), string(resp.Value))
 	return &pb.GetResponse{Value: resp.Value}, nil
 }
 
 // gRPC Delete RPC
 func (s *Server) Delete(ctx context.Context, req *pb.DeleteRequest) (*emptypb.Empty, error) {
+	fmt.Printf("RPC Delete %s", req.Key)
 	resp := s.sendRequest(ctx, Request{
 		Op:           OpDelete,
 		Key:          req.Key,

@@ -100,7 +100,9 @@ func (w *Wal) writerLoop() {
 		}
 
 		for _, e := range pending {
+			if w.ackMode != AckAfterEnqueue {
 			close(e.done)
+		}
 		}
 		pending = pending[:0]
 	}
