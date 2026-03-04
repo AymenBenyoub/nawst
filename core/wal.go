@@ -47,7 +47,7 @@ func NewWal(path string, bufferSize int, ackMode AckMode) (*Wal, error) {
 	w := &Wal{
 		file:     f,
 		writer:   bufio.NewWriterSize(f, bufferSize),
-		appendCh: make(chan walEntry, 1024),
+		appendCh: make(chan walEntry, 8192),
 		closeCh:  make(chan struct{}),
 		ackMode:  ackMode,
 	}
@@ -79,12 +79,13 @@ func (w *Wal) Append(cmd Command) (<-chan struct{}, error) {
 
 func (w *Wal) writerLoop() {
 	defer w.wg.Done()
-
-	ticker := time.NewTicker(200 * time.Millisecond)
+	const maxBatchSize = 1024
+	const flushInterval = 35 * time.Millisecond
+	ticker := time.NewTicker(flushInterval)
 	defer ticker.Stop()
 
 	var pending []walEntry
-	maxBatchSize := 512
+
 	flush := func(doSync bool) {
 		if len(pending) == 0 {
 			return
@@ -101,8 +102,8 @@ func (w *Wal) writerLoop() {
 
 		for _, e := range pending {
 			if w.ackMode != AckAfterEnqueue {
-			close(e.done)
-		}
+				close(e.done)
+			}
 		}
 		pending = pending[:0]
 	}

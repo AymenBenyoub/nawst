@@ -12,7 +12,8 @@ var port = flag.Int("port", 9999, "server port")
 var ack = flag.Int("ack", 1, "ack mode: 0=after enqueue, 1=after flush, 2=after fsync")
 func main() {
 	flag.Parse()
-
+    const writerBufferSize = 10 * 1024
+	const requestChannelSize = 2 * 1024
 	// Determine cross-platform data directory
 	baseDir, err := os.UserConfigDir()
 	if err != nil {
@@ -39,14 +40,14 @@ func main() {
 	}
 
 	
-	wal, err := core.NewWal(walPath, 1024, core.AckMode(*ack))
+	wal, err := core.NewWal(walPath, writerBufferSize, core.AckMode(*ack))
 	if err != nil {
 		panic(err)
 	}
 	defer wal.Close()
 
 	
-	reqCh := make(chan core.Request, 1024)
+	reqCh := make(chan core.Request, requestChannelSize)
 	eventLoop := &core.EventLoop{
 		Store: store,
 		Wal:   wal,
