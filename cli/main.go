@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -16,26 +17,27 @@ import (
 	pb "github.com/AymenBenyoub/nawst/core/proto"
 )
 
+var addr = flag.String("addr", "localhost:9999", "server address in format host:port")
+
 func main() {
-	// default server address
-	addr := "localhost:9999"
+	flag.Parse()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-
-	conn, err := grpc.DialContext(ctx, addr, grpc.WithTransportCredentials(insecure.NewCredentials()), grpc.WithBlock())
+	conn, err := grpc.NewClient(*addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
-		log.Fatalf("failed to connect to server %s: %v", addr, err)
+		log.Fatalf("failed to connect to server %s: %v", *addr, err)
 	}
 	defer conn.Close()
 
+	_, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
 	client := pb.NewKVClient(conn)
 
-	fmt.Println("Connected to", addr)
+	fmt.Println("Connected to", *addr)
 	scanner := bufio.NewScanner(os.Stdin)
 
 	for {
-		fmt.Print("> ")
+		fmt.Print("kvcli> ")
 		if !scanner.Scan() {
 			break // EOF
 		}
