@@ -3,7 +3,7 @@ package core
 import (
 	"context"
 	"errors"
-	"fmt"
+
 	"log"
 	"net"
 	"os"
@@ -37,14 +37,14 @@ type Response struct {
 	Err    error
 }
 
-// NewServer returns a server using the given event loop request channel
+
 func NewServer(reqCh chan<- Request) *Server {
 	return &Server{
 		reqCh: reqCh,
 	}
 }
 
-// Start listens on the given port and runs the gRPC server
+
 func (s *Server) Start(port int) error {
 	lis, err := net.Listen("tcp", ":"+strconv.Itoa(port))
 	if err != nil {
@@ -86,7 +86,7 @@ func (s *Server) sendRequest(ctx context.Context, req Request) Response {
 
 // gRPC Put RPC
 func (s *Server) Put(ctx context.Context, req *pb.PutRequest) (*emptypb.Empty, error) {
-	fmt.Printf("RPC Put %s length: %d val: %v\n", req.Key, len(req.Value), string(req.Value))
+
 	resp := s.sendRequest(ctx, Request{
 		Op:           OpPut,
 		Key:          req.Key,
@@ -113,13 +113,12 @@ func (s *Server) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, 
 		}
 		return nil, status.Errorf(codes.Internal, "Failed to get key: %v", resp.Err)
 	}
-	fmt.Printf("RPC Get %s length: %d val: %v\n", req.Key, len(resp.Value), string(resp.Value))
-	return &pb.GetResponse{Value: resp.Value}, nil
+		return &pb.GetResponse{Value: resp.Value}, nil
 }
 
 // gRPC Delete RPC
 func (s *Server) Delete(ctx context.Context, req *pb.DeleteRequest) (*emptypb.Empty, error) {
-	fmt.Printf("RPC Delete %s\n", req.Key)
+	
 	resp := s.sendRequest(ctx, Request{
 		Op:           OpDelete,
 		Key:          req.Key,

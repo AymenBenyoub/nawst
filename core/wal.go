@@ -79,8 +79,8 @@ func (w *Wal) Append(cmd Command) (<-chan struct{}, error) {
 
 func (w *Wal) writerLoop() {
 	defer w.wg.Done()
-	const maxBatchSize = 1024
-	const flushInterval = 35 * time.Millisecond
+	const maxBatchSize = 4096
+	const flushInterval = 2 * time.Millisecond
 	ticker := time.NewTicker(flushInterval)
 	defer ticker.Stop()
 
@@ -119,7 +119,7 @@ func (w *Wal) writerLoop() {
 			}
 			pending = append(pending, e)
 			if len(pending) >= maxBatchSize {
-				flush(w.ackMode == AckAfterFlush || w.ackMode == AckAfterFsync)
+				flush(w.ackMode == AckAfterFsync)
 			}
 		case <-ticker.C:
 			for {
@@ -134,7 +134,7 @@ func (w *Wal) writerLoop() {
 				}
 			}
 		done:
-			flush(w.ackMode == AckAfterFsync || w.ackMode == AckAfterFlush)
+			flush(w.ackMode == AckAfterFsync)
 
 		case <-w.closeCh:
 			flush(true)
