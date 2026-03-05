@@ -80,7 +80,7 @@ func (w *Wal) Append(cmd Command) (<-chan struct{}, error) {
 func (w *Wal) writerLoop() {
 	defer w.wg.Done()
 	const maxBatchSize = 4096
-	const flushInterval = 2 * time.Millisecond
+	const flushInterval = 1 * time.Millisecond
 	ticker := time.NewTicker(flushInterval)
 	defer ticker.Stop()
 
