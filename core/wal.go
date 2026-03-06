@@ -60,21 +60,68 @@ func NewWal(path string, bufferSize int, ackMode AckMode) (*Wal, error) {
 
 // Append enqueues a command and returns a channel that will be closed
 // once the configured durability level is reached.
-func (w *Wal) Append(cmd Command) (<-chan struct{}, error) {
-	entry := walEntry{
-		cmd:  cmd,
-		done: make(chan struct{}),
+func (w *Wal) Append(cmd_batch []Command) (<-chan struct{}, error) {
+	if w.ackMode == AckAfterEnqueue {
+		for _, cmd := range cmd_batch {
+			entry := walEntry{
+				cmd:  cmd,
+				done: nil, // No channel needed
+			}
+			select {
+			case w.appendCh <- entry:
+			case <-w.closeCh:
+				return nil, errors.New("wal is closed")
+			}
+		}
+		ch := make(chan struct{})
+		close(ch)
+		return ch, nil
+	}
+	if len(cmd_batch) == 0 {
+		ch := make(chan struct{})
+		close(ch)
+		return ch, nil
 	}
 
-	select {
-	case w.appendCh <- entry:
-		if w.ackMode == AckAfterEnqueue {
-			close(entry.done)
+	// per-entry done channels, aggregated into batchDone
+	entryChans := make([]chan struct{}, 0, len(cmd_batch))
+
+	for _, cmd := range cmd_batch {
+		echan := make(chan struct{})
+		entry := walEntry{
+			cmd:  cmd,
+			done: echan,
 		}
-		return entry.done, nil
-	case <-w.closeCh:
-		return nil, errors.New("wal is closed")
+
+		select {
+		case w.appendCh <- entry:
+			entryChans = append(entryChans, echan)
+		case <-w.closeCh:
+			return nil, errors.New("wal is closed")
+		}
 	}
+
+	batchDone := make(chan struct{})
+
+	// If ack after enqueue, close all entry channels immediately and the batch
+	if w.ackMode == AckAfterEnqueue {
+		for _, ch := range entryChans {
+			close(ch)
+		}
+		close(batchDone)
+		return batchDone, nil
+	}
+
+	// Otherwise, wait for all per-entry channels to be closed by writerLoop,
+	// then close the batchDone channel once.
+	go func(chs []chan struct{}, out chan struct{}) {
+		for _, c := range chs {
+			<-c
+		}
+		close(out)
+	}(entryChans, batchDone)
+
+	return batchDone, nil
 }
 
 func (w *Wal) writerLoop() {
