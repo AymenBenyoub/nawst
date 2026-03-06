@@ -1,8 +1,16 @@
 package core
 
 import (
+	"sync"
 	"time"
 )
+
+// Pool for reusing Command slices
+var commandPool = sync.Pool{
+	New: func() interface{} {
+		return make([]Command, 0, 512)
+	},
+}
 
 type EventLoop struct {
 	Store *Store
@@ -38,13 +46,14 @@ func (el *EventLoop) Run() {
 			return
 		}
 
-		commands := make([]Command, len(writeBatch))
-		for i, r := range writeBatch {
-			commands[i] = Command{
+		// Get Command slice from pool, reset length
+		commands := commandPool.Get().([]Command)[:0]
+		for _, r := range writeBatch {
+			commands = append(commands, Command{
 				Op:    r.Op,
 				Key:   r.Key,
 				Value: r.Value,
-			}
+			})
 		}
 
 		done, err := el.Wal.Append(commands)
@@ -53,6 +62,7 @@ func (el *EventLoop) Run() {
 				r.ResponseChan <- Response{Err: err}
 			}
 			writeBatch = writeBatch[:0]
+			commandPool.Put(commands)
 			return
 		}
 
@@ -64,6 +74,7 @@ func (el *EventLoop) Run() {
 		}
 
 		writeBatch = writeBatch[:0]
+		commandPool.Put(commands)
 	}
 
 	for {

@@ -4,3 +4,4 @@ stress.exe
 kvcli
 kvserver
 stress
+kvserver_default

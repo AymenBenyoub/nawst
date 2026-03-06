@@ -11,6 +11,13 @@ import (
 	"time"
 )
 
+// Pool for reusing []chan struct{} slices
+var entryChannelsPool = sync.Pool{
+	New: func() interface{} {
+		return make([]chan struct{}, 0, 512)
+	},
+}
+
 type AckMode uint8
 
 const (
@@ -83,8 +90,8 @@ func (w *Wal) Append(cmd_batch []Command) (<-chan struct{}, error) {
 		return ch, nil
 	}
 
-	// per-entry done channels, aggregated into batchDone
-	entryChans := make([]chan struct{}, 0, len(cmd_batch))
+	// per-entry done channels, aggregated into batchDone (from pool)
+	entryChans := entryChannelsPool.Get().([]chan struct{})[:0]
 
 	for _, cmd := range cmd_batch {
 		echan := make(chan struct{})
@@ -97,6 +104,7 @@ func (w *Wal) Append(cmd_batch []Command) (<-chan struct{}, error) {
 		case w.appendCh <- entry:
 			entryChans = append(entryChans, echan)
 		case <-w.closeCh:
+			entryChannelsPool.Put(entryChans)
 			return nil, errors.New("wal is closed")
 		}
 	}
@@ -108,6 +116,7 @@ func (w *Wal) Append(cmd_batch []Command) (<-chan struct{}, error) {
 		for _, ch := range entryChans {
 			close(ch)
 		}
+		entryChannelsPool.Put(entryChans)
 		close(batchDone)
 		return batchDone, nil
 	}
@@ -118,6 +127,7 @@ func (w *Wal) Append(cmd_batch []Command) (<-chan struct{}, error) {
 		for _, c := range chs {
 			<-c
 		}
+		entryChannelsPool.Put(chs)
 		close(out)
 	}(entryChans, batchDone)
 
