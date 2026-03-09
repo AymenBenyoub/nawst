@@ -3,20 +3,11 @@ package core
 import (
 	"bufio"
 	"encoding/binary"
-	"errors"
-	"fmt"
 	"io"
 	"os"
 	"sync"
-	"time"
+	"sync/atomic"
 )
-
-// Pool for reusing []chan struct{} slices
-var entryChannelsPool = sync.Pool{
-	New: func() interface{} {
-		return make([]chan struct{}, 0, 512)
-	},
-}
 
 type AckMode uint8
 
@@ -26,25 +17,27 @@ const (
 	AckAfterFsync                  // durable
 )
 
-type walEntry struct {
-	cmd  Command
-	done chan struct{} // closed when durability boundary is reached
+type walBatch struct {
+	id   uint64
+	cmds []Command
 }
 
 type Wal struct {
-	file   *os.File
-	writer *bufio.Writer
+	file      *os.File
+	appendCh  chan walBatch
+	closeCh   chan struct{}
+	ackMode   AckMode
 
-	appendCh chan walEntry
-	closeCh  chan struct{}
+	nextID    uint64
+	flushedID uint64
 
-	ackMode AckMode
-
-	wg sync.WaitGroup
+	mu   sync.Mutex
+	cond *sync.Cond
+	err  error // Propagates fatal disk errors
+	wg   sync.WaitGroup
 }
 
 // NewWal opens the WAL and starts the writer goroutine.
-// Replay MUST be done before calling this.
 func NewWal(path string, bufferSize int, ackMode AckMode) (*Wal, error) {
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE|os.O_APPEND, 0644)
 	if err != nil {
@@ -53,179 +46,121 @@ func NewWal(path string, bufferSize int, ackMode AckMode) (*Wal, error) {
 
 	w := &Wal{
 		file:     f,
-		writer:   bufio.NewWriterSize(f, bufferSize),
-		appendCh: make(chan walEntry, 8192),
+		appendCh: make(chan walBatch, 1024),
 		closeCh:  make(chan struct{}),
 		ackMode:  ackMode,
 	}
+	w.cond = sync.NewCond(&w.mu)
 
 	w.wg.Add(1)
-	go w.writerLoop()
+	go w.writerLoop(bufferSize)
 
 	return w, nil
 }
 
-// Append enqueues a command and returns a channel that will be closed
-// once the configured durability level is reached.
-func (w *Wal) Append(cmd_batch []Command) (<-chan struct{}, error) {
-	if w.ackMode == AckAfterEnqueue {
-		for _, cmd := range cmd_batch {
-			entry := walEntry{
-				cmd:  cmd,
-				done: nil, // No channel needed
-			}
-			select {
-			case w.appendCh <- entry:
-			case <-w.closeCh:
-				return nil, errors.New("wal is closed")
-			}
-		}
-		ch := make(chan struct{})
-		close(ch)
-		return ch, nil
-	}
-	if len(cmd_batch) == 0 {
-		ch := make(chan struct{})
-		close(ch)
-		return ch, nil
-	}
-
-	// per-entry done channels, aggregated into batchDone (from pool)
-	entryChans := entryChannelsPool.Get().([]chan struct{})[:0]
-
-	for _, cmd := range cmd_batch {
-		echan := make(chan struct{})
-		entry := walEntry{
-			cmd:  cmd,
-			done: echan,
-		}
-
-		select {
-		case w.appendCh <- entry:
-			entryChans = append(entryChans, echan)
-		case <-w.closeCh:
-			entryChannelsPool.Put(entryChans)
-			return nil, errors.New("wal is closed")
-		}
-	}
-
-	batchDone := make(chan struct{})
-
-	// If ack after enqueue, close all entry channels immediately and the batch
-	if w.ackMode == AckAfterEnqueue {
-		for _, ch := range entryChans {
-			close(ch)
-		}
-		entryChannelsPool.Put(entryChans)
-		close(batchDone)
-		return batchDone, nil
-	}
-
-	// Otherwise, wait for all per-entry channels to be closed by writerLoop,
-	// then close the batchDone channel once.
-	go func(chs []chan struct{}, out chan struct{}) {
-		for _, c := range chs {
-			<-c
-		}
-		entryChannelsPool.Put(chs)
-		close(out)
-	}(entryChans, batchDone)
-
-	return batchDone, nil
+// Append enqueues a batch and returns its Sequence ID.
+func (w *Wal) Append(cmds []Command) uint64 {
+	id := atomic.AddUint64(&w.nextID, uint64(len(cmds)))
+	w.appendCh <- walBatch{id: id, cmds: cmds}
+	return id
 }
 
-func (w *Wal) writerLoop() {
+// Wait blocks until the sequence ID is safely durable, returning any disk errors.
+// It instantly returns nil if in Enqueue mode.
+func (w *Wal) Wait(id uint64) error {
+	if w.ackMode == AckAfterEnqueue {
+		return nil
+	}
+	
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	for atomic.LoadUint64(&w.flushedID) < id && w.err == nil {
+		w.cond.Wait()
+	}
+	return w.err
+}
+
+func (w *Wal) writerLoop(bufferSize int) {
 	defer w.wg.Done()
-	const maxBatchSize = 4096
-	const flushInterval = 1 * time.Millisecond
-	ticker := time.NewTicker(flushInterval)
-	defer ticker.Stop()
 
-	var pending []walEntry
+	buf := make([]byte, bufferSize)
+	pos := 0
 
-	flush := func(doSync bool) {
-		if len(pending) == 0 {
-			return
+	flush := func() error {
+		if pos == 0 {
+			return nil
 		}
-
-		if err := w.writer.Flush(); err != nil {
-			fmt.Fprintf(os.Stderr, "Flush error: %v\n", err)
+		if _, err := w.file.Write(buf[:pos]); err != nil {
+			return err
 		}
-		if doSync {
+		if w.ackMode == AckAfterFsync {
 			if err := w.file.Sync(); err != nil {
-				fmt.Fprintf(os.Stderr, "Fsync error: %v\n", err)
+				return err
 			}
 		}
-
-		for _, e := range pending {
-			if w.ackMode != AckAfterEnqueue {
-				close(e.done)
-			}
-		}
-		pending = pending[:0]
+		pos = 0
+		return nil
 	}
 
 	for {
 		select {
-		case e := <-w.appendCh:
-			if err := w.writeCommand(e.cmd); err != nil {
-				// log and mark the entry as failed
-				fmt.Fprintf(os.Stderr, "WAL write failed: %v\n", err)
-				close(e.done) // still close so the caller doesn't block forever
-				continue
-			}
-			pending = append(pending, e)
-			if len(pending) >= maxBatchSize {
-				flush(w.ackMode == AckAfterFsync)
-			}
-		case <-ticker.C:
-			for {
-				select {
-				// in case new entries arrived after the ticker ticked, include them in same batch
-				// instead of waiting for the next tick.
-				case e := <-w.appendCh:
-					w.writeCommand(e.cmd)
-					pending = append(pending, e)
-				default:
-					goto done
+		case batch := <-w.appendCh:
+			for _, cmd := range batch.cmds {
+				needed := 1 + binary.MaxVarintLen64*2 + len(cmd.Key) + len(cmd.Value)
+
+				// Flush if full. Grow buffer if a single command is massive.
+				if pos+needed > len(buf) {
+					if err := flush(); err != nil {
+						w.fail(err)
+						return
+					}
+					if needed > len(buf) {
+						buf = make([]byte, needed)
+					}
 				}
+
+				buf[pos] = byte(cmd.Op)
+				pos++
+
+				n := binary.PutUvarint(buf[pos:], uint64(len(cmd.Key)))
+				pos += n
+				pos += copy(buf[pos:], cmd.Key)
+
+				n = binary.PutUvarint(buf[pos:], uint64(len(cmd.Value)))
+				pos += n
+				pos += copy(buf[pos:], cmd.Value)
 			}
-		done:
-			flush(w.ackMode == AckAfterFsync)
+
+			// If channel is empty, flush immediately for lower latency
+			if len(w.appendCh) == 0 {
+				if err := flush(); err != nil {
+					w.fail(err)
+					return
+				}
+				atomic.StoreUint64(&w.flushedID, batch.id)
+				w.cond.Broadcast()
+			}
 
 		case <-w.closeCh:
-			flush(true)
+			flush()
+			w.file.Sync()
 			return
 		}
 	}
 }
 
-func (w *Wal) writeCommand(cmd Command) error {
-	var buf [binary.MaxVarintLen64]byte
+// fail sets a fatal error and wakes up all waiting Reapers
+func (w *Wal) fail(err error) {
+	w.mu.Lock()
+	w.err = err
+	w.cond.Broadcast()
+	w.mu.Unlock()
+}
 
-	if err := w.writer.WriteByte(byte(cmd.Op)); err != nil {
-		return err
-	}
-
-	key := []byte(cmd.Key)
-	n := binary.PutUvarint(buf[:], uint64(len(key)))
-	if _, err := w.writer.Write(buf[:n]); err != nil {
-		return err
-	}
-	if _, err := w.writer.Write(key); err != nil {
-		return err
-	}
-
-	n = binary.PutUvarint(buf[:], uint64(len(cmd.Value)))
-	if _, err := w.writer.Write(buf[:n]); err != nil {
-		return err
-	}
-	if _, err := w.writer.Write(cmd.Value); err != nil {
-		return err
-	}
-
-	ts := time.Now().UnixNano()
-	return binary.Write(w.writer, binary.LittleEndian, ts)
+func (w *Wal) Close() error {
+	close(w.closeCh)
+	w.wg.Wait()
+	return w.file.Close()
 }
 
 // MUST be called before NewWal starts the writer goroutine.
@@ -249,9 +184,6 @@ func ReplayWal(path string, apply func(Command) error) error {
 
 		keyLen, err := binary.ReadUvarint(r)
 		if err != nil {
-			if err == io.EOF {
-				return nil
-			}
 			return err
 		}
 		key := make([]byte, keyLen)
@@ -261,23 +193,11 @@ func ReplayWal(path string, apply func(Command) error) error {
 
 		valLen, err := binary.ReadUvarint(r)
 		if err != nil {
-			if err == io.EOF {
-				return nil
-			}
 			return err
 		}
 		val := make([]byte, valLen)
 		if _, err := io.ReadFull(r, val); err != nil {
 			return err
-		}
-
-		var ts int64
-		errr := binary.Read(r, binary.LittleEndian, &ts)
-		if errr != nil {
-			if errr == io.EOF {
-				return nil
-			}
-			return errr
 		}
 
 		if err := apply(Command{
@@ -288,11 +208,4 @@ func ReplayWal(path string, apply func(Command) error) error {
 			return err
 		}
 	}
-}
-
-func (w *Wal) Close() error {
-	close(w.closeCh)
-	w.wg.Wait()
-	_ = w.writer.Flush()
-	return w.file.Close()
 }

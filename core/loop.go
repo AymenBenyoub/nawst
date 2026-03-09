@@ -1,21 +1,19 @@
 package core
 
 import (
-	"sync"
+	
 	"time"
 )
-
-// Pool for reusing Command slices
-var commandPool = sync.Pool{
-	New: func() interface{} {
-		return make([]Command, 0, 512)
-	},
-}
 
 type EventLoop struct {
 	Store *Store
 	Wal   *Wal
 	ReqCh <-chan Request
+}
+
+type pendingAck struct {
+	id       uint64
+	requests []Request
 }
 
 type OpType uint8
@@ -32,57 +30,58 @@ type Command struct {
 	Value []byte
 }
 
-const batchSize = 32
-const batchTimeout = 5 * time.Millisecond
+
+const batchSize = 512
+const batchTimeout = 2 * time.Millisecond
 
 func (el *EventLoop) Run() {
-	ticker := time.NewTicker(batchTimeout)
-	defer ticker.Stop()
+	ackCh := make(chan pendingAck, 1024)
+
+	// Reaper Goroutine: Handles gRPC responses asynchronously
+	go func() {
+		for ack := range ackCh {
+			// Wait for WAL durability (instantly returns nil if Enqueue mode)
+			diskErr := el.Wal.Wait(ack.id)
+			
+			// Respond to all clients in this batch
+			for _, req := range ack.requests {
+				req.ResponseChan <- Response{Err: diskErr}
+			}
+		}
+	}()
 
 	var writeBatch []Request
+	ticker := time.NewTicker(batchTimeout)
+	defer ticker.Stop()
 
 	processBatch := func() {
 		if len(writeBatch) == 0 {
 			return
 		}
 
-		// Get Command slice from pool, reset length
-		commands := commandPool.Get().([]Command)[:0]
-		for _, r := range writeBatch {
-			commands = append(commands, Command{
-				Op:    r.Op,
-				Key:   r.Key,
-				Value: r.Value,
-			})
+		cmds := make([]Command, len(writeBatch))
+		for i, r := range writeBatch {
+			cmds[i] = Command{Op: r.Op, Key: r.Key, Value: r.Value}
+			
+			el.Store.Apply(cmds[i])
 		}
+        // still counts as 'WAL' because it won't return until the batch is flushed or fsynced, depending on the ack mode.
+		// Non-blocking Append to WAL, 
+		id := el.Wal.Append(cmds)
 
-		done, err := el.Wal.Append(commands)
-		if err != nil {
-			for _, r := range writeBatch {
-				r.ResponseChan <- Response{Err: err}
-			}
-			writeBatch = writeBatch[:0]
-			commandPool.Put(commands)
-			return
-		}
-
-		<-done
-
-		for i, cmd := range commands {
-			err := el.Store.Apply(cmd)
-			writeBatch[i].ResponseChan <- Response{Err: err}
-		}
+		// Hand off to response routine for async durability acknowledgment
+	
+		ackCh <- pendingAck{id: id, requests:  append([]Request(nil), writeBatch...)}
 
 		writeBatch = writeBatch[:0]
-		commandPool.Put(commands)
 	}
 
 	for {
 		select {
 		case req, ok := <-el.ReqCh:
 			if !ok {
-
 				processBatch()
+				close(ackCh)
 				return
 			}
 
@@ -90,23 +89,16 @@ func (el *EventLoop) Run() {
 				val, err := el.Store.Get(req.Key)
 				req.ResponseChan <- Response{Value: val, Err: err}
 			} else {
-				//bypass batching for AckAfterEnqueue mode to minimize latency
+				// Fast-path bypass for AckAfterEnqueue
 				if el.Wal.ackMode == AckAfterEnqueue {
 					cmd := Command{Op: req.Op, Key: req.Key, Value: req.Value}
-					done, err := el.Wal.Append([]Command{cmd})
-					if err != nil {
-						req.ResponseChan <- Response{Err: err}
-						continue
-					}
-					<-done
-					err = el.Store.Apply(cmd)
+					el.Wal.Append([]Command{cmd})
+					err := el.Store.Apply(cmd)
 					req.ResponseChan <- Response{Err: err}
 					continue
 				}
 
-				// Batch writes for durable ack modes
 				writeBatch = append(writeBatch, req)
-
 				if len(writeBatch) >= batchSize {
 					processBatch()
 					ticker.Reset(batchTimeout)
@@ -114,7 +106,6 @@ func (el *EventLoop) Run() {
 			}
 
 		case <-ticker.C:
-
 			processBatch()
 		}
 	}
