@@ -3,6 +3,10 @@ package core
 import (
 	"context"
 	"errors"
+	"io"
+
+	"sync/atomic"
+	"time"
 
 	"log"
 	"net"
@@ -32,18 +36,16 @@ type Request struct {
 }
 
 type Response struct {
-	Exists bool
-	Value  []byte
-	Err    error
+	Op    OpType
+	Value []byte
+	Err   error
 }
-
 
 func NewServer(reqCh chan<- Request) *Server {
 	return &Server{
 		reqCh: reqCh,
 	}
 }
-
 
 func (s *Server) Start(port int) error {
 	lis, err := net.Listen("tcp", ":"+strconv.Itoa(port))
@@ -101,7 +103,7 @@ func (s *Server) Put(ctx context.Context, req *pb.PutRequest) (*emptypb.Empty, e
 
 // gRPC Get RPC
 func (s *Server) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, error) {
-	
+
 	resp := s.sendRequest(ctx, Request{
 		Op:           OpGet,
 		Key:          req.Key,
@@ -113,12 +115,12 @@ func (s *Server) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, 
 		}
 		return nil, status.Errorf(codes.Internal, "Failed to get key: %v", resp.Err)
 	}
-		return &pb.GetResponse{Value: resp.Value}, nil
+	return &pb.GetResponse{Value: resp.Value}, nil
 }
 
 // gRPC Delete RPC
 func (s *Server) Delete(ctx context.Context, req *pb.DeleteRequest) (*emptypb.Empty, error) {
-	
+
 	resp := s.sendRequest(ctx, Request{
 		Op:           OpDelete,
 		Key:          req.Key,
@@ -128,4 +130,90 @@ func (s *Server) Delete(ctx context.Context, req *pb.DeleteRequest) (*emptypb.Em
 		return nil, status.Errorf(codes.Internal, "Failed to delete key: %v", resp.Err)
 	}
 	return &emptypb.Empty{}, nil
+}
+func (s *Server) StreamKV(stream pb.KV_StreamKVServer) error {
+	// Buffer to hold ACKs coming back from the EventLoop
+	respCh := make(chan Response, 10000)
+	ctx := stream.Context()
+
+	var inFlight int64
+
+	// Receiver Goroutine: Streams ACKs back to the client
+	go func() {
+		for {
+			select {
+			case <-ctx.Done():
+				// The client violently disconnected or timed out. Exit cleanly.
+				return
+			case resp := <-respCh:
+				errStr := ""
+				if resp.Err != nil {
+					errStr = resp.Err.Error()
+				}
+				var protoOp pb.Op
+				if resp.Op == OpPut {
+					protoOp = pb.Op_PUT
+				} else if resp.Op == OpGet {
+					protoOp = pb.Op_GET
+				} else {
+					protoOp = pb.Op_DELETE
+				}
+				// Blast the response back to the client
+				stream.Send(&pb.StreamResp{
+					Op:    protoOp,
+					Value: resp.Value,
+					Error: errStr,
+				})
+
+				// Mark one request as safely handled
+				atomic.AddInt64(&inFlight, -1)
+			}
+		}
+	}()
+
+	// Sender Loop: Reads from the client stream
+	for {
+		req, err := stream.Recv()
+		if err == io.EOF {
+			break // Client sent all requests and called CloseSend()
+		}
+		if err != nil {
+			return err
+		}
+
+		var coreOp OpType
+		if req.Op == pb.Op_PUT {
+			coreOp = OpPut
+		} else if req.Op == pb.Op_GET {
+			coreOp = OpGet
+		} else {
+			coreOp = OpDelete
+		}
+
+		// Track that we have a new request in flight
+		atomic.AddInt64(&inFlight, 1)
+
+		// Send to EventLoop
+		s.reqCh <- Request{
+			Op:           coreOp,
+			Key:          req.Key,
+			Value:        req.Value,
+			ResponseChan: respCh,
+		}
+	}
+
+	// 🔥 GRACEFUL DRAIN 🔥
+	// The client is done sending, but the EventLoop might still be writing the final batch to disk.
+	// We wait here until every single request has been answered.
+	for atomic.LoadInt64(&inFlight) > 0 {
+		if ctx.Err() != nil {
+			break // Stop waiting if the client disconnected entirely
+		}
+		time.Sleep(1 * time.Millisecond)
+	}
+
+	// We return nil. gRPC automatically closes the stream and kills the context.
+	// Notice we DO NOT close(respCh) here, preventing the EventLoop from panicking
+	// if it happens to be running a split millisecond behind.
+	return nil
 }

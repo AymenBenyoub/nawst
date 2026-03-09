@@ -13,7 +13,7 @@ var ack = flag.Int("ack", 1, "ack mode: 0=after enqueue, 1=after flush, 2=after 
 func main() {
 	flag.Parse()
     const writerBufferSize = 64 * 1024
-	const requestChannelSize = 4 * 1024
+	const requestChannelSize = 10000
 	// Determine cross-platform data directory
 	baseDir, err := os.UserConfigDir()
 	if err != nil {

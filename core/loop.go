@@ -1,7 +1,6 @@
 package core
 
 import (
-	
 	"time"
 )
 
@@ -30,83 +29,84 @@ type Command struct {
 	Value []byte
 }
 
-
 const batchSize = 512
 const batchTimeout = 2 * time.Millisecond
 
 func (el *EventLoop) Run() {
-	ackCh := make(chan pendingAck, 1024)
+    ackCh := make(chan pendingAck, 10000)
 
-	// Reaper Goroutine: Handles gRPC responses asynchronously
-	go func() {
-		for ack := range ackCh {
-			// Wait for WAL durability (instantly returns nil if Enqueue mode)
-			diskErr := el.Wal.Wait(ack.id)
-			
-			// Respond to all clients in this batch
-			for _, req := range ack.requests {
-				req.ResponseChan <- Response{Err: diskErr}
-			}
-		}
-	}()
+    // Reaper Goroutine: Handles gRPC responses asynchronously
+    go func() {
+        for ack := range ackCh {
+            // Wait for WAL durability (instantly returns nil if Enqueue mode)
+            diskErr := el.Wal.Wait(ack.id)
 
-	var writeBatch []Request
-	ticker := time.NewTicker(batchTimeout)
-	defer ticker.Stop()
+            // Respond to all clients in this batch. 
+            // BLOCKING send ensures we never drop an ACK and break the inFlight count.
+            for _, req := range ack.requests {
+                req.ResponseChan <- Response{Op: req.Op, Err: diskErr}
+            }
+        }
+    }()
 
-	processBatch := func() {
-		if len(writeBatch) == 0 {
-			return
-		}
+    var writeBatch []Request
+    ticker := time.NewTicker(batchTimeout)
+    defer ticker.Stop()
 
-		cmds := make([]Command, len(writeBatch))
-		for i, r := range writeBatch {
-			cmds[i] = Command{Op: r.Op, Key: r.Key, Value: r.Value}
-			
-			el.Store.Apply(cmds[i])
-		}
-        // still counts as 'WAL' because it won't return until the batch is flushed or fsynced, depending on the ack mode.
-		// Non-blocking Append to WAL, 
-		id := el.Wal.Append(cmds)
+    processBatch := func() {
+        if len(writeBatch) == 0 {
+            return
+        }
 
-		// Hand off to response routine for async durability acknowledgment
-	
-		ackCh <- pendingAck{id: id, requests:  append([]Request(nil), writeBatch...)}
+        cmds := make([]Command, len(writeBatch))
+        for i, r := range writeBatch {
+            cmds[i] = Command{Op: r.Op, Key: r.Key, Value: r.Value}
+            el.Store.Apply(cmds[i])
+        }
+        
+        // Non-blocking Append to WAL
+        id := el.Wal.Append(cmds)
 
-		writeBatch = writeBatch[:0]
-	}
+        // Hand off to response routine for async durability acknowledgment
+        ackCh <- pendingAck{id: id, requests: append([]Request(nil), writeBatch...)}
 
-	for {
-		select {
-		case req, ok := <-el.ReqCh:
-			if !ok {
-				processBatch()
-				close(ackCh)
-				return
-			}
+        writeBatch = writeBatch[:0]
+    }
 
-			if req.Op == OpGet {
-				val, err := el.Store.Get(req.Key)
-				req.ResponseChan <- Response{Value: val, Err: err}
-			} else {
-				// Fast-path bypass for AckAfterEnqueue
-				if el.Wal.ackMode == AckAfterEnqueue {
-					cmd := Command{Op: req.Op, Key: req.Key, Value: req.Value}
-					el.Wal.Append([]Command{cmd})
-					err := el.Store.Apply(cmd)
-					req.ResponseChan <- Response{Err: err}
-					continue
-				}
+    for {
+        select {
+        case req, ok := <-el.ReqCh:
+            if !ok {
+                processBatch()
+                close(ackCh)
+                return
+            }
 
-				writeBatch = append(writeBatch, req)
-				if len(writeBatch) >= batchSize {
-					processBatch()
-					ticker.Reset(batchTimeout)
-				}
-			}
+            if req.Op == OpGet {
+                val, err := el.Store.Get(req.Key)
+                // BLOCKING send for GET requests
+                req.ResponseChan <- Response{Op: req.Op, Value: val, Err: err}
+            } else {
+                // Fast-path bypass for AckAfterEnqueue
+                if el.Wal.ackMode == AckAfterEnqueue {
+                    cmd := Command{Op: req.Op, Key: req.Key, Value: req.Value}
+                    el.Wal.Append([]Command{cmd})
+                    err := el.Store.Apply(cmd)
+                    
+                    // BLOCKING send for fast-path
+                    req.ResponseChan <- Response{Op: req.Op, Err: err}
+                    continue
+                }
 
-		case <-ticker.C:
-			processBatch()
-		}
-	}
+                writeBatch = append(writeBatch, req)
+                if len(writeBatch) >= batchSize {
+                    processBatch()
+                    ticker.Reset(batchTimeout)
+                }
+            }
+
+        case <-ticker.C:
+            processBatch()
+        }
+    }
 }
