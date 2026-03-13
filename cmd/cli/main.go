@@ -7,29 +7,78 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 
 	pb "github.com/AymenBenyoub/nawst/core/proto"
 )
 
 var addr = flag.String("addr", "localhost:9999", "server address in format host:port")
+var rpcTimeout = flag.Duration("rpc-timeout", 10*time.Second, "timeout for each RPC operation")
+
+func validateAddr(target string) error {
+	host, port, err := net.SplitHostPort(target)
+	if err != nil {
+		return fmt.Errorf("invalid address %q: expected host:port: %w", target, err)
+	}
+	if host == "" {
+		return fmt.Errorf("invalid address %q: host is empty", target)
+	}
+
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return fmt.Errorf("invalid address %q: port must be between 1 and 65535", target)
+	}
+
+	return nil
+}
+
+func waitForReady(ctx context.Context, conn *grpc.ClientConn) error {
+	conn.Connect()
+
+	for {
+		state := conn.GetState()
+		if state == connectivity.Ready {
+			return nil
+		}
+		if state == connectivity.Shutdown {
+			return fmt.Errorf("connection closed while dialing")
+		}
+		if !conn.WaitForStateChange(ctx, state) {
+			return ctx.Err()
+		}
+	}
+}
 
 func main() {
 	flag.Parse()
 
-	conn, err := grpc.NewClient(*addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err := validateAddr(*addr); err != nil {
+		log.Fatal(err)
+	}
+
+	conn, err := grpc.NewClient(
+		*addr,
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+
 	if err != nil {
-		log.Fatalf("failed to connect to server %s: %v", *addr, err)
+		log.Fatalf("failed to connect to server %s within 5s: %v", *addr, err)
 	}
 	defer conn.Close()
 
-	_, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	dialCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+	if err := waitForReady(dialCtx, conn); err != nil {
+		log.Fatalf("failed to connect to server %s within 5s: %v", *addr, err)
+	}
 
 	client := pb.NewKVClient(conn)
 
@@ -60,7 +109,7 @@ func main() {
 				continue
 			}
 			key := parts[1]
-			ctx, c := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, c := context.WithTimeout(context.Background(), *rpcTimeout)
 			resp, err := client.Get(ctx, &pb.GetRequest{Key: key})
 			c()
 			if err != nil {
@@ -75,7 +124,7 @@ func main() {
 			}
 			key := parts[1]
 			val := []byte(parts[2])
-			ctx, c := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, c := context.WithTimeout(context.Background(), *rpcTimeout)
 			_, err := client.Put(ctx, &pb.PutRequest{Key: key, Value: val})
 			c()
 			if err != nil {
@@ -95,7 +144,7 @@ func main() {
 				fmt.Println("file read error:", err)
 				continue
 			}
-			ctx, c := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, c := context.WithTimeout(context.Background(), *rpcTimeout)
 			_, err = client.Put(ctx, &pb.PutRequest{Key: key, Value: data})
 			c()
 			if err != nil {
@@ -109,7 +158,7 @@ func main() {
 				continue
 			}
 			key := parts[1]
-			ctx, c := context.WithTimeout(context.Background(), 5*time.Second)
+			ctx, c := context.WithTimeout(context.Background(), *rpcTimeout)
 			_, err := client.Delete(ctx, &pb.DeleteRequest{Key: key})
 			c()
 			if err != nil {

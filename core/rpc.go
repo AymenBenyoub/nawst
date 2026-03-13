@@ -48,7 +48,7 @@ func NewServer(reqCh chan<- Request) *Server {
 }
 
 func (s *Server) Start(port int) error {
-	lis, err := net.Listen("tcp", ":"+strconv.Itoa(port))
+	lis, err := net.Listen("tcp", "0.0.0.0:"+strconv.Itoa(port))
 	if err != nil {
 		return err
 	}
@@ -66,7 +66,7 @@ func (s *Server) Start(port int) error {
 		grpcServer.GracefulStop()
 	}()
 
-	log.Printf("gRPC server listening on port %d\n", port)
+	log.Printf("gRPC server listening on address %s\n", lis.Addr())
 	return grpcServer.Serve(lis)
 }
 
