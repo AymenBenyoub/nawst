@@ -35,7 +35,7 @@ const batchTimeout = 2 * time.Millisecond
 func (el *EventLoop) Run() {
     ackCh := make(chan pendingAck, 10000)
 
-    // Reaper Goroutine: Handles gRPC responses asynchronously
+    // Handles gRPC responses asynchronously
     go func() {
         for ack := range ackCh {
             // Wait for WAL durability (instantly returns nil if Enqueue mode)

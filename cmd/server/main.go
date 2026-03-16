@@ -14,7 +14,7 @@ func main() {
 	flag.Parse()
     const writerBufferSize = 64 * 1024
 	const requestChannelSize = 10000
-	// Determine cross-platform data directory
+	// determine cross-platform data directory
 	baseDir, err := os.UserConfigDir()
 	if err != nil {
 		panic(err)
