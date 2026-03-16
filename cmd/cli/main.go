@@ -7,89 +7,44 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"os"
-	"strconv"
 	"strings"
 	"time"
 
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/connectivity"
 	"google.golang.org/grpc/credentials/insecure"
 
 	pb "github.com/AymenBenyoub/nawst/core/proto"
 )
 
-var addr = flag.String("addr", "localhost:9999", "server address in format host:port")
-var rpcTimeout = flag.Duration("rpc-timeout", 10*time.Second, "timeout for each RPC operation")
-
-func validateAddr(target string) error {
-	host, port, err := net.SplitHostPort(target)
-	if err != nil {
-		return fmt.Errorf("invalid address %q: expected host:port: %w", target, err)
-	}
-	if host == "" {
-		return fmt.Errorf("invalid address %q: host is empty", target)
-	}
-
-	portNumber, err := strconv.Atoi(port)
-	if err != nil || portNumber < 1 || portNumber > 65535 {
-		return fmt.Errorf("invalid address %q: port must be between 1 and 65535", target)
-	}
-
-	return nil
-}
-
-func waitForReady(ctx context.Context, conn *grpc.ClientConn) error {
-	conn.Connect()
-
-	for {
-		state := conn.GetState()
-		if state == connectivity.Ready {
-			return nil
-		}
-		if state == connectivity.Shutdown {
-			return fmt.Errorf("connection closed while dialing")
-		}
-		if !conn.WaitForStateChange(ctx, state) {
-			return ctx.Err()
-		}
-	}
-}
+var (
+	addr       = flag.String("addr", "localhost:9999", "server address (host:port)")
+	rpcTimeout = flag.Duration("rpc-timeout", 5*time.Second, "timeout for each RPC operation")
+)
 
 func main() {
 	flag.Parse()
 
-	if err := validateAddr(*addr); err != nil {
-		log.Fatal(err)
-	}
-
+	// NewClient is non-blocking. It won't fail even if the server is offline.
 	conn, err := grpc.NewClient(
 		*addr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 	)
-
 	if err != nil {
-		log.Fatalf("failed to connect to server %s within 5s: %v", *addr, err)
+		log.Fatalf("did not connect: %v", err)
 	}
 	defer conn.Close()
 
-	dialCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	if err := waitForReady(dialCtx, conn); err != nil {
-		log.Fatalf("failed to connect to server %s within 5s: %v", *addr, err)
-	}
-
 	client := pb.NewKVClient(conn)
+	fmt.Printf("KV CLI started. Target: %s\nType 'help' for commands.\n", *addr)
 
-	fmt.Println("Connected to", *addr)
 	scanner := bufio.NewScanner(os.Stdin)
-
 	for {
 		fmt.Print("kvcli> ")
 		if !scanner.Scan() {
-			break // EOF
+			break
 		}
+
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" {
 			continue
@@ -98,77 +53,68 @@ func main() {
 		parts := strings.Fields(line)
 		cmd := strings.ToLower(parts[0])
 
+		// Logic for shared context per request
+		ctx, cancel := context.WithTimeout(context.Background(), *rpcTimeout)
+
 		switch cmd {
 		case "quit", "exit":
+			cancel()
 			return
 		case "help":
 			fmt.Println("Commands: get KEY, put KEY VALUE, putfile KEY PATH, delete KEY, quit")
 		case "get":
 			if len(parts) < 2 {
 				fmt.Println("usage: get KEY")
-				continue
+			} else {
+				resp, err := client.Get(ctx, &pb.GetRequest{Key: parts[1]})
+				if err != nil {
+					fmt.Printf("Error: %v\n", err)
+				} else {
+					fmt.Println(string(resp.GetValue()))
+				}
 			}
-			key := parts[1]
-			ctx, c := context.WithTimeout(context.Background(), *rpcTimeout)
-			resp, err := client.Get(ctx, &pb.GetRequest{Key: key})
-			c()
-			if err != nil {
-				fmt.Println("Get error:", err)
-				continue
-			}
-			fmt.Println(string(resp.GetValue()))
 		case "put":
 			if len(parts) < 3 {
 				fmt.Println("usage: put KEY VALUE")
-				continue
+			} else {
+				_, err := client.Put(ctx, &pb.PutRequest{Key: parts[1], Value: []byte(parts[2])})
+				if err != nil {
+					fmt.Printf("Error: %v\n", err)
+				} else {
+					fmt.Println("OK")
+				}
 			}
-			key := parts[1]
-			val := []byte(parts[2])
-			ctx, c := context.WithTimeout(context.Background(), *rpcTimeout)
-			_, err := client.Put(ctx, &pb.PutRequest{Key: key, Value: val})
-			c()
-			if err != nil {
-				fmt.Println("Put error:", err)
-				continue
-			}
-			fmt.Println("OK")
 		case "putfile":
 			if len(parts) < 3 {
 				fmt.Println("usage: putfile KEY PATH")
-				continue
+			} else {
+				data, err := os.ReadFile(parts[2])
+				if err != nil {
+					fmt.Printf("File error: %v\n", err)
+				} else {
+					_, err = client.Put(ctx, &pb.PutRequest{Key: parts[1], Value: data})
+					if err != nil {
+						fmt.Printf("Error: %v\n", err)
+					} else {
+						fmt.Println("OK")
+					}
+				}
 			}
-			key := parts[1]
-			path := parts[2]
-			data, err := os.ReadFile(path)
-			if err != nil {
-				fmt.Println("file read error:", err)
-				continue
-			}
-			ctx, c := context.WithTimeout(context.Background(), *rpcTimeout)
-			_, err = client.Put(ctx, &pb.PutRequest{Key: key, Value: data})
-			c()
-			if err != nil {
-				fmt.Println("Put error:", err)
-				continue
-			}
-			fmt.Println("OK")
 		case "delete":
 			if len(parts) < 2 {
 				fmt.Println("usage: delete KEY")
-				continue
+			} else {
+				_, err := client.Delete(ctx, &pb.DeleteRequest{Key: parts[1]})
+				if err != nil {
+					fmt.Printf("Error: %v\n", err)
+				} else {
+					fmt.Println("OK")
+				}
 			}
-			key := parts[1]
-			ctx, c := context.WithTimeout(context.Background(), *rpcTimeout)
-			_, err := client.Delete(ctx, &pb.DeleteRequest{Key: key})
-			c()
-			if err != nil {
-				fmt.Println("Delete error:", err)
-				continue
-			}
-			fmt.Println("OK")
 		default:
-			fmt.Println("unknown command; type help")
+			fmt.Println("Unknown command. Type 'help'.")
 		}
+		cancel() // Clean up context after each command
 	}
 
 	if err := scanner.Err(); err != nil && err != io.EOF {
