@@ -162,16 +162,24 @@ func (r *Replicator) ReplicateToAll(ctx context.Context, op pb.Op, key string, v
 				cctx, cCancel = context.WithTimeout(callCtx, 2*time.Second)
 				defer cCancel()
 			}
-
-			_, err := c.Replicate(cctx, &pb.ReplicationRequest{
+			req := &pb.ReplicationRequest{
 				Op:    op,
 				Key:   key,
 				Value: value,
-			})
-			if err != nil {
-				resultCh <- fmt.Errorf("replicate to %s failed: %w", pid, err)
+			}
+
+			_, err := c.Replicate(cctx, req)
+			if err == nil {
+				resultCh <- nil
 				return
 			}
+
+			retryErr := retryReplication(pid, c, req, cctx)
+			if retryErr != nil {
+				resultCh <- fmt.Errorf("replicate to %s failed after retries: %w", pid, retryErr)
+				return
+			}
+
 			resultCh <- nil
 		}(t.id, t.client)
 	}
@@ -218,6 +226,37 @@ func (r *Replicator) ReplicatePut(ctx context.Context, key string, value []byte)
 
 func (r *Replicator) ReplicateDelete(ctx context.Context, key string) error {
 	return r.ReplicateToAll(ctx, pb.Op_DELETE, key, nil)
+}
+func retryReplication(pid string, c pb.KVClient, req *pb.ReplicationRequest, cctx context.Context) error {
+	const maxAttempts = 3
+	backoff := 500 * time.Millisecond
+
+	var lastErr error
+
+	for attempt := range maxAttempts {
+		select {
+		case <-cctx.Done():
+			return fmt.Errorf("context cancelled while retrying replication to %s: %w", pid, cctx.Err())
+		default:
+		}
+
+		_, err := c.Replicate(cctx, req)
+		if err == nil {
+			return nil
+		}
+		lastErr = err
+
+		if attempt < maxAttempts-1 {
+			select {
+			case <-cctx.Done():
+				return fmt.Errorf("context cancelled while retrying replication to %s: %w", pid, cctx.Err())
+			case <-time.After(backoff):
+			}
+			backoff *= 2
+		}
+	}
+
+	return fmt.Errorf("retry replication to %s exhausted: %w", pid, lastErr)
 }
 
 func (r *Replicator) Close() error {
