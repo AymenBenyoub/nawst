@@ -17,6 +17,7 @@ func main() {
 	var seedGossipAddr = flag.String("seed-gossip-addr", "127.0.0.1:7946", "seed node memberlist address")
 
 	var walDir = flag.String("wal-dir", "", "directory for WAL files (default: kvst/node-<rpc-port>)")
+	var replicationFactor = flag.Int("rf", 3, "replication factor for the cluster")
 	flag.Parse()
 	const writerBufferSize = 64 * 1024
 	const requestChannelSize = 10000
@@ -73,7 +74,7 @@ func main() {
 	// }
 	Node := &cluster.Node{
 		ID:                nodeID,
-		Addr:              fmt.Sprintf("%s:%d", "0.0.0.0", *rpc_port),
+		RPCAddr:           fmt.Sprintf("%s:%d", "127.0.0.1", *rpc_port),
 		Ml:                nil,
 		EventLoop:         eventLoop,
 		Server:            server,
@@ -90,6 +91,9 @@ func main() {
 			panic(err)
 		}
 	}
+	replicator := cluster.NewReplicator(nodeID, Node.Ml, *replicationFactor)
+	server.Replicator = replicator
+	defer replicator.Close()
 	// fmt.Printf("Server running at %s\n", Node.Addr)
 	if err := Node.Server.Start(*rpc_port); err != nil {
 		panic(err)

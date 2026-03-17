@@ -10,7 +10,7 @@ import (
 
 type Node struct {
 	ID                string
-	Addr              string
+	RPCAddr           string
 	Ml                *memberlist.Memberlist
 	EventLoop         *core.EventLoop
 	Server            *core.Server
@@ -20,6 +20,25 @@ type Node struct {
 	GossipAdvertiseIP string
 }
 
+// memberlist.Delgate interface implementation, for now i only need
+// NodeMeta to share grpc address for replication, others may be used
+// later on.
+func (n *Node) NodeMeta(limit int) []byte {
+	return fmt.Appendf(nil, "%s:%s", n.ID, n.RPCAddr)
+}
+func (n *Node) NotifyMsg(b []byte) {
+	
+}
+func (n *Node) GetBroadcasts(overhead, limit int) [][]byte {
+	return nil 
+}
+func (n *Node) LocalState(join bool) []byte {
+	return nil 
+}
+func (n *Node) MergeRemoteState(buf []byte, join bool) {
+	
+}
+
 func (n *Node) CreateCluster() error {
 	cfg := memberlist.DefaultLocalConfig()
 	cfg.Name = n.ID
@@ -27,6 +46,7 @@ func (n *Node) CreateCluster() error {
 	if bindAddr == "" {
 		bindAddr = "0.0.0.0"
 	}
+
 	advertiseIP := n.GossipAdvertiseIP
 	if advertiseIP == "" {
 		advertiseIP = "127.0.0.1"
@@ -34,6 +54,8 @@ func (n *Node) CreateCluster() error {
 	cfg.BindAddr = bindAddr
 	cfg.AdvertiseAddr = advertiseIP
 	cfg.BindPort = n.GossipBindPort
+
+	cfg.Delegate = n
 	ml, err := memberlist.Create(cfg)
 	if err != nil {
 		return err
@@ -50,8 +72,7 @@ func (n *Node) JoinCluster(seedNodeAddr string) error {
 		return fmt.Errorf("seed node address is required")
 	}
 	_, err := n.Ml.Join([]string{seedNodeAddr})
-	fmt.Printf("Node joined cluster: %s , %s\n", n.Ml.LocalNode().String(), n.Addr)
-	fmt.Printf("Current cluster members: %v\n", n.Ml.Members())
+
 	return err
 }
 func (n *Node) LeaveCluster() error {
@@ -60,6 +81,5 @@ func (n *Node) LeaveCluster() error {
 	}
 	err := n.Ml.Leave(5 * time.Second)
 
-	fmt.Printf("Node left cluster: %s\n", n.Ml.LocalNode().String())
 	return err
 }

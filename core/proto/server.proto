@@ -8,7 +8,7 @@ service KV {
     rpc Get(GetRequest) returns (GetResponse);
     rpc Put(PutRequest) returns (google.protobuf.Empty);
     rpc Delete(DeleteRequest) returns (google.protobuf.Empty);
-
+    rpc Replicate(ReplicationRequest) returns (google.protobuf.Empty);
     rpc StreamKV(stream StreamReq) returns (stream StreamResp);
 }
 
@@ -30,7 +30,11 @@ message DeleteRequest {
     string key =1 ;
 }
 
-
+message ReplicationRequest {
+    Op op =1 ;
+    string key = 2;
+    bytes value =3;
+}
 enum Op {
     PUT = 0;
     GET = 1;

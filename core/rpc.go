@@ -23,9 +23,13 @@ import (
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
+type Replicator interface {
+	ReplicateToAll(ctx context.Context, op pb.Op, key string, value []byte) error
+}
 type Server struct {
 	pb.UnimplementedKVServer
-	reqCh chan<- Request
+	reqCh      chan<- Request
+	Replicator Replicator
 }
 
 type Request struct {
@@ -98,6 +102,15 @@ func (s *Server) Put(ctx context.Context, req *pb.PutRequest) (*emptypb.Empty, e
 	if resp.Err != nil {
 		return nil, status.Errorf(codes.Internal, "Failed to put key: %v", resp.Err)
 	}
+	if s.Replicator != nil {
+		repCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		if err := s.Replicator.ReplicateToAll(repCtx, pb.Op_PUT, req.Key, req.Value); err != nil {
+			cancel()
+			return nil, status.Errorf(codes.Internal, "Failed to replicate put: %v", err)
+		}
+
+		cancel()
+	}
 	return &emptypb.Empty{}, nil
 }
 
@@ -128,6 +141,39 @@ func (s *Server) Delete(ctx context.Context, req *pb.DeleteRequest) (*emptypb.Em
 	})
 	if resp.Err != nil {
 		return nil, status.Errorf(codes.Internal, "Failed to delete key: %v", resp.Err)
+	}
+	if s.Replicator != nil {
+        
+
+
+		repCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		if err := s.Replicator.ReplicateToAll(repCtx, pb.Op_DELETE, req.Key, nil); err != nil {
+			cancel()
+			return nil, status.Errorf(codes.Internal, "Failed to replicate delete: %v", err)
+		}
+
+		cancel()
+	}
+	return &emptypb.Empty{}, nil
+}
+func (s *Server) Replicate(ctx context.Context, req *pb.ReplicationRequest) (*emptypb.Empty, error) {
+	var op OpType
+	if req.Op == pb.Op_PUT {
+		op = OpPut
+	} else if req.Op == pb.Op_DELETE {
+		op = OpDelete
+	} else {
+		return nil, status.Error(codes.InvalidArgument, "Invalid operation type for replication")
+	}
+
+	resp := s.sendRequest(ctx, Request{
+		Op:           op,
+		Key:          req.Key,
+		Value:        req.Value,
+		ResponseChan: make(chan Response, 1),
+	})
+	if resp.Err != nil {
+		return nil, status.Errorf(codes.Internal, "Replication failed: %v", resp.Err)
 	}
 	return &emptypb.Empty{}, nil
 }
