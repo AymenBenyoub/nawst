@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -112,9 +113,6 @@ func (r *Replicator) ReplicateToAll(ctx context.Context, op pb.Op, key string, v
 	var firstErr error
 
 	for _, member := range members {
-		if len(targets) >= effectiveRF-1 {
-			break
-		}
 		peerID, _, err := parseMeta(member.Meta)
 		if err != nil {
 			if firstErr == nil {
@@ -135,6 +133,14 @@ func (r *Replicator) ReplicateToAll(ctx context.Context, op pb.Op, key string, v
 		}
 
 		targets = append(targets, target{id: peerID, client: client})
+	}
+
+	// Keep replica target choice deterministic before introducing ring-based placement.
+	sort.Slice(targets, func(i, j int) bool {
+		return targets[i].id < targets[j].id
+	})
+	if len(targets) > effectiveRF-1 {
+		targets = targets[:effectiveRF-1]
 	}
 
 	remaining := len(targets)
@@ -233,7 +239,7 @@ func retryReplication(pid string, c pb.KVClient, req *pb.ReplicationRequest, cct
 
 	var lastErr error
 
-	for attempt := range maxAttempts {
+	for attempt := 0; attempt < maxAttempts; attempt++ {
 		select {
 		case <-cctx.Done():
 			return fmt.Errorf("context cancelled while retrying replication to %s: %w", pid, cctx.Err())
