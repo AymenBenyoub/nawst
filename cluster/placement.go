@@ -5,6 +5,7 @@ import (
 	"math"
 	"math/bits"
 	"sort"
+	"strconv"
 
 	"github.com/cespare/xxhash/v2"
 )
@@ -173,29 +174,55 @@ func (p *Placement) AssignVNodes(nodeCounts map[string]int) {
 		}
 	}
 
-	// 4. Calculate exactly who needs how many
-	var nodesNeeding []string
+	// 4. Calculate deficits for each node.
+	deficits := make(map[string]int)
 	for nodeID, target := range nodeCounts {
 		curr := currentCounts[nodeID]
-		for j := 0; j < (target - curr); j++ {
-			nodesNeeding = append(nodesNeeding, nodeID)
+		if target > curr {
+			deficits[nodeID] = target - curr
 		}
 	}
 
-	// Sort deterministically to prevent flakiness
-	sort.Strings(nodesNeeding)
-
-	// 5. Assign the orphaned VNodes to the nodes with deficits
-	if len(orphanedVNodes) != len(nodesNeeding) {
+	// 5. Assign the orphaned VNodes to deficit nodes with deterministic scatter.
+	deficitTotal := 0
+	for _, d := range deficits {
+		deficitTotal += d
+	}
+	if len(orphanedVNodes) != deficitTotal {
 		// Panic or log fatal: Math is broken if these don't match exactly
 		panic("Mismatch between orphaned VNodes and deficit counts")
 	}
 
-	reassignments := make([]string, 0)
-	for i, vnodeID := range orphanedVNodes {
-		newOwner := nodesNeeding[i]
+	deficitIDs := make([]string, 0, len(deficits))
+	for nodeID := range deficits {
+		deficitIDs = append(deficitIDs, nodeID)
+	}
+	sort.Strings(deficitIDs)
+
+	reassignments := 0
+	for _, vnodeID := range orphanedVNodes {
+		bestNode := ""
+		bestScore := uint64(0)
+
+		for _, nodeID := range deficitIDs {
+			if deficits[nodeID] <= 0 {
+				continue
+			}
+			score := xxhash.Sum64String(nodeID + ":" + strconv.FormatUint(uint64(vnodeID), 10))
+			if bestNode == "" || score > bestScore || (score == bestScore && nodeID < bestNode) {
+				bestNode = nodeID
+				bestScore = score
+			}
+		}
+
+		if bestNode == "" {
+			panic("No node with remaining deficit while assigning orphaned vnode")
+		}
+
+		newOwner := bestNode
 		p.VNodes[vnodeID].Primary = newOwner
-		reassignments = append(reassignments, newOwner)
+		deficits[newOwner]--
+		reassignments++
 	}
 
 	p.Epoch++
@@ -208,8 +235,8 @@ func (p *Placement) AssignVNodes(nodeCounts map[string]int) {
 		}
 	}
 	log.Printf("[placement] epoch=%d vnode distribution: %v", p.Epoch, distribution)
-	if len(reassignments) > 0 {
-		log.Printf("[placement] vnode reassignments: %d vnodes redistributed", len(reassignments))
+	if reassignments > 0 {
+		log.Printf("[placement] vnode reassignments: %d vnodes redistributed", reassignments)
 	}
 }
 

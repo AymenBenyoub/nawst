@@ -119,7 +119,17 @@ func (r *Replicator) UpdatePlacement() {
 	log.Printf("[replicator] updating placement for %d active nodes: %v", len(activeMetrics), memberNodeIDs)
 
 	scores := CalculateScores(activeMetrics)
-	pl := &Placement{Nodes: scores}
+	prev := r.getPlacement()
+	prevEpoch := uint64(0)
+	var prevVNodes []VNode
+	if prev != nil {
+		prevEpoch = prev.Epoch
+		if len(prev.VNodes) == VNodeCount {
+			prevVNodes = cloneVNodes(prev.VNodes)
+		}
+	}
+
+	pl := &Placement{Epoch: prevEpoch, Nodes: scores, VNodes: prevVNodes}
 	counts := pl.GetTargetVNodeCount(scores)
 	pl.AssignVNodes(counts)
 	pl.AssignReplicas(activeMetrics, rttMatrix, r.ReplicationFactor)
@@ -132,6 +142,20 @@ func (r *Replicator) getPlacement() *Placement {
 	r.plMu.RLock()
 	defer r.plMu.RUnlock()
 	return r.placement
+}
+
+func cloneVNodes(src []VNode) []VNode {
+	if len(src) == 0 {
+		return nil
+	}
+	dst := make([]VNode, len(src))
+	for i := range src {
+		dst[i] = src[i]
+		if src[i].Replicas != nil {
+			dst[i].Replicas = append([]string(nil), src[i].Replicas...)
+		}
+	}
+	return dst
 }
 
 func parseMeta(meta []byte) (nodeID string, rpcAddr string, err error) {

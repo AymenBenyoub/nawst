@@ -102,16 +102,16 @@ func main() {
 
 	// Demo metrics and RTT matrix - will be used for placement updates
 	demoMetrics := []cluster.NodeMetrics{
-		{NodeID: "node-9999", AvgRTT: 1.1, BandwidthMbps: 1000, NetUsage: 0.25},
-		{NodeID: "node-10000", AvgRTT: 1.5, BandwidthMbps: 900, NetUsage: 0.30},
-		{NodeID: "node-10001", AvgRTT: 2.0, BandwidthMbps: 800, NetUsage: 0.35},
-		{NodeID: "node-10002", AvgRTT: 1.3, BandwidthMbps: 950, NetUsage: 0.28},
+		{NodeID: "node-9", AvgRTT: 1.1, BandwidthMbps: 1000, NetUsage: 0.25},
+		{NodeID: "node-10", AvgRTT: 1.5, BandwidthMbps: 900, NetUsage: 0.30},
+		{NodeID: "node-11", AvgRTT: 2.0, BandwidthMbps: 800, NetUsage: 0.35},
+		{NodeID: "node-12", AvgRTT: 28.6, BandwidthMbps: 90, NetUsage: 0.68},
 	}
 	demoRTT := map[string]map[string]float64{
-		"node-9999":  {"node-10000": 1.2, "node-10001": 1.9, "node-10002": 1.4},
-		"node-10000": {"node-9999": 1.2, "node-10001": 1.6, "node-10002": 1.1},
-		"node-10001": {"node-9999": 1.9, "node-10000": 1.6, "node-10002": 1.8},
-		"node-10002": {"node-9999": 1.4, "node-10000": 1.1, "node-10001": 1.8},
+		"node-9":  {"node-10": 1.2, "node-11": 1.9, "node-12": 1.4},
+		"node-1": {"node-9": 1.2, "node-11": 1.6, "node-12": 1.1},
+		"node-11": {"node-9": 1.9, "node-10": 1.6, "node-12": 1.8},
+		"node-12": {"node-9": 50, "node-10": 20, "node-11": 16},
 	}
 
 	// Store metrics in replicator for dynamic placement updates
