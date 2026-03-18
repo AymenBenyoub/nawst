@@ -2,6 +2,7 @@ package cluster
 
 import (
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/AymenBenyoub/nawst/core"
@@ -9,15 +10,50 @@ import (
 )
 
 type Node struct {
-	ID                string
-	RPCAddr           string
-	Ml                *memberlist.Memberlist
-	EventLoop         *core.EventLoop
-	Server            *core.Server
-	HealthScore       float32
-	GossipBindAddr    string
-	GossipBindPort    int
-	GossipAdvertiseIP string
+	ID                  string
+	RPCAddr             string
+	Ml                  *memberlist.Memberlist
+	EventLoop           *core.EventLoop
+	Server              *core.Server
+	OnMembershipChanged func()
+	HealthScore         float32
+	GossipBindAddr      string
+	GossipBindPort      int
+	GossipAdvertiseIP   string
+}
+
+type nodeEventDelegate struct {
+	node *Node
+}
+
+func (d *nodeEventDelegate) NotifyJoin(n *memberlist.Node) {
+	if d == nil || d.node == nil {
+		return
+	}
+	log.Printf("membership event: join name=%s addr=%s", n.Name, n.Address())
+	if d.node.OnMembershipChanged != nil {
+		d.node.OnMembershipChanged()
+	}
+}
+
+func (d *nodeEventDelegate) NotifyLeave(n *memberlist.Node) {
+	if d == nil || d.node == nil {
+		return
+	}
+	log.Printf("membership event: leave name=%s addr=%s", n.Name, n.Address())
+	if d.node.OnMembershipChanged != nil {
+		d.node.OnMembershipChanged()
+	}
+}
+
+func (d *nodeEventDelegate) NotifyUpdate(n *memberlist.Node) {
+	if d == nil || d.node == nil {
+		return
+	}
+	log.Printf("membership event: update name=%s addr=%s", n.Name, n.Address())
+	if d.node.OnMembershipChanged != nil {
+		d.node.OnMembershipChanged()
+	}
 }
 
 // memberlist.Delgate interface implementation, for now i only need
@@ -27,24 +63,28 @@ func (n *Node) NodeMeta(limit int) []byte {
 	return fmt.Appendf(nil, "%s:%s", n.ID, n.RPCAddr)
 }
 func (n *Node) NotifyMsg(b []byte) {
-	
+
 }
 func (n *Node) GetBroadcasts(overhead, limit int) [][]byte {
-	return nil 
+	return nil
 }
 func (n *Node) LocalState(join bool) []byte {
-	return nil 
+	return nil
 }
 func (n *Node) MergeRemoteState(buf []byte, join bool) {
-	
+
 }
 
 func (n *Node) CreateCluster() error {
 	cfg := memberlist.DefaultLocalConfig()
+	// Relax timeouts for local testing environment to avoid flakiness
+	cfg.ProbeTimeout = 2 * time.Second
+	cfg.ProbeInterval = 2 * time.Second
+	cfg.GossipInterval = 500 * time.Millisecond
 	cfg.Name = n.ID
 	bindAddr := n.GossipBindAddr
 	if bindAddr == "" {
-		bindAddr = "0.0.0.0"
+		bindAddr = "127.0.0.1"
 	}
 
 	advertiseIP := n.GossipAdvertiseIP
@@ -56,6 +96,8 @@ func (n *Node) CreateCluster() error {
 	cfg.BindPort = n.GossipBindPort
 
 	cfg.Delegate = n
+	cfg.Events = &nodeEventDelegate{node: n}
+	cfg.AdvertisePort = n.GossipBindPort
 	ml, err := memberlist.Create(cfg)
 	if err != nil {
 		return err

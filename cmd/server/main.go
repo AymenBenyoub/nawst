@@ -3,8 +3,10 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/AymenBenyoub/nawst/cluster"
 	"github.com/AymenBenyoub/nawst/core"
@@ -15,9 +17,14 @@ func main() {
 	var ack = flag.Int("ack", 1, "ack mode: 0=after enqueue, 1=after flush, 2=after fsync")
 	var gossipPort = flag.Int("gossip-port", 0, "memberlist gossip port (0 selects random port on non-seed node)")
 	var seedGossipAddr = flag.String("seed-gossip-addr", "127.0.0.1:7946", "seed node memberlist address")
+	var gossipBindAddr = flag.String("gossip-bind-addr", "0.0.0.0", "memberlist bind address")
+	var advertiseIP = flag.String("advertise-ip", "127.0.0.1", "IP to advertise to peers (must be reachable by other nodes)")
+	var rpcAdvertiseHost = flag.String("rpc-advertise-host", "", "host/IP peers should use for gRPC replication (default: advertise-ip)")
 
 	var walDir = flag.String("wal-dir", "", "directory for WAL files (default: kvst/node-<rpc-port>)")
 	var replicationFactor = flag.Int("rf", 3, "replication factor for the cluster")
+	var joinRetries = flag.Int("join-retries", 5, "number of initial retries to join seed node")
+	var joinRetryInterval = flag.Duration("join-retry-interval", 2*time.Second, "interval between seed join retries")
 	flag.Parse()
 	const writerBufferSize = 64 * 1024
 	const requestChannelSize = 10000
@@ -64,9 +71,17 @@ func main() {
 
 	server := core.NewServer(reqCh)
 	nodeID := fmt.Sprintf("node-%d", *rpc_port)
+	rpcHost := *rpcAdvertiseHost
+	if rpcHost == "" {
+		rpcHost = *advertiseIP
+	}
+
 	resolvedGossipPort := *gossipPort
 	if resolvedGossipPort == 0 && *rpc_port == 9999 {
 		resolvedGossipPort = 7946
+	} else if resolvedGossipPort == 0 {
+		// Deterministic default for non-seed nodes avoids hard-to-debug random ports.
+		resolvedGossipPort = 7946 + (*rpc_port - 9999)
 	}
 	// host, err := os.Hostname()
 	// if err != nil {
@@ -74,24 +89,51 @@ func main() {
 	// }
 	Node := &cluster.Node{
 		ID:                nodeID,
-		RPCAddr:           fmt.Sprintf("%s:%d", "127.0.0.1", *rpc_port),
+		RPCAddr:           fmt.Sprintf("%s:%d", rpcHost, *rpc_port),
 		Ml:                nil,
 		EventLoop:         eventLoop,
 		Server:            server,
 		HealthScore:       0.75,
-		GossipBindAddr:    "0.0.0.0",
+		GossipBindAddr:    *gossipBindAddr,
 		GossipBindPort:    resolvedGossipPort,
-		GossipAdvertiseIP: "127.0.0.1",
+		GossipAdvertiseIP: *advertiseIP,
 	}
 	if err := Node.CreateCluster(); err != nil {
 		panic(err)
 	}
+	log.Printf("membership: local node=%s gossip=%s:%d seed=%s", nodeID, Node.GossipAdvertiseIP, Node.GossipBindPort, *seedGossipAddr)
 	if *rpc_port != 9999 {
-		if err := Node.JoinCluster(*seedGossipAddr); err != nil {
-			panic(err)
+		joined := false
+		for attempt := 1; attempt <= *joinRetries; attempt++ {
+			if err := Node.JoinCluster(*seedGossipAddr); err == nil {
+				log.Printf("membership: joined seed=%s on attempt=%d", *seedGossipAddr, attempt)
+				joined = true
+				break
+			} else {
+				log.Printf("membership: join attempt=%d failed seed=%s err=%v", attempt, *seedGossipAddr, err)
+				if attempt < *joinRetries {
+					time.Sleep(*joinRetryInterval)
+				}
+			}
+		}
+
+		if !joined {
+			log.Printf("membership: continuing without seed for now; will retry in background")
+			go func() {
+				for {
+					time.Sleep(*joinRetryInterval)
+					if err := Node.JoinCluster(*seedGossipAddr); err == nil {
+						log.Printf("membership: background join succeeded seed=%s", *seedGossipAddr)
+						return
+					}
+				}
+			}()
 		}
 	}
 	replicator := cluster.NewReplicator(nodeID, Node.Ml, *replicationFactor)
+	Node.OnMembershipChanged = replicator.RefreshPlacementNow
+	replicator.RefreshPlacementNow()
+
 	server.Replicator = replicator
 	defer replicator.Close()
 	// fmt.Printf("Server running at %s\n", Node.Addr)

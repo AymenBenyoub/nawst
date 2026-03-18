@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"log"
 	"math"
 	"math/bits"
 	"sort"
@@ -45,7 +46,7 @@ func HashKey(key string) uint64 {
 // It defines the static tokens for all 1024 VNodes forever.
 func InitializeVNodes() []VNode {
 	vnodes := make([]VNode, VNodeCount)
-	for i := 0; i < VNodeCount; i++ {
+	for i := range VNodeCount {
 		vnodes[i] = VNode{
 			ID:    uint16(i),
 			Token: uint64(i) * TokenBucketSize,
@@ -131,7 +132,7 @@ func (p *Placement) GetTargetVNodeCount(nodes []NodeInfo) map[string]int {
 	for i := range allocs {
 		counts[allocs[i].id] = allocs[i].base
 	}
-	for i := 0; i < rest; i++ {
+	for i := range rest {
 		counts[allocs[i].id]++
 	}
 
@@ -192,6 +193,95 @@ func (p *Placement) AssignVNodes(nodeCounts map[string]int) {
 	for i, vnodeID := range orphanedVNodes {
 		p.VNodes[vnodeID].Primary = nodesNeeding[i]
 	}
-	
+
+	finalCounts := make(map[string]int)
+	for _, v := range p.VNodes {
+		if v.Primary != "" {
+			finalCounts[v.Primary]++
+		}
+	}
+	for nodeID, cnt := range finalCounts {
+		log.Printf("placement: vnodes assigned node=%s count=%d", nodeID, cnt)
+	}
+
 	p.Epoch++
+}
+
+func (p *Placement) AssignReplicas(metrics []NodeMetrics, rttMatrix map[string]map[string]float64, rf int) {
+	if rf <= 1 {
+		for i := range p.VNodes {
+			p.VNodes[i].Replicas = nil
+		}
+		return
+	}
+
+	// 1. Create a lookup map for metrics by NodeID for O(1) access
+	statsMap := make(map[string]NodeMetrics)
+	for _, m := range metrics {
+		statsMap[m.NodeID] = m
+	}
+
+	for i := range p.VNodes {
+		v := &p.VNodes[i]
+		primaryID := v.Primary
+		if primaryID == "" {
+			continue // Can't assign replicas for an unowned VNode
+		}
+
+		type candidate struct {
+			id    string
+			score float64
+		}
+		var candidates []candidate
+
+		for _, node := range p.Nodes {
+			// Rule: A replica cannot be on the same physical node as the Primary
+			if node.ID == primaryID {
+				continue
+			}
+
+			m, exists := statsMap[node.ID]
+			if !exists {
+				continue
+			}
+
+			// RTT from the specific Primary to this potential Replica
+			rtt := 1000.0
+			if row, ok := rttMatrix[primaryID]; ok {
+				if val, ok := row[node.ID]; ok && val > 0 {
+					rtt = val
+				}
+			}
+
+			// BW Penalty: Use the asymptotic formula on NetUsage (0.0 - 1.0)
+			// This prevents picking a node that is currently saturated.
+			bwPenalty := 1.0 / (1.01 - m.NetUsage)
+
+			// Capacity Factor: Adjust for the physical size of the pipe.
+			// Higher bandwidth capacity should LOWER the total cost.
+			// (Assuming BandwidthMbps is the static capacity)
+			capFactor := 1.0 / (float64(m.BandwidthMbps) + 1e-9)
+
+			// Final Suitability Score: Lower is better.
+			// We want low RTT, low Saturation, and high Capacity.
+			suitability := rtt * bwPenalty * capFactor
+
+			candidates = append(candidates, candidate{node.ID, suitability})
+		}
+
+		// Sort candidates by the best (lowest) suitability score
+		sort.Slice(candidates, func(i, j int) bool {
+			if candidates[i].score == candidates[j].score {
+				return candidates[i].id < candidates[j].id
+			}
+			return candidates[i].score < candidates[j].score
+		})
+
+		// Assign the top rf-1 candidates as replicas
+		v.Replicas = []string{}
+		for j := 0; j < rf-1 && j < len(candidates); j++ {
+			v.Replicas = append(v.Replicas, candidates[j].id)
+		}
+	}
+
 }
