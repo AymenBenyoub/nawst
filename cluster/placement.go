@@ -142,6 +142,7 @@ func (p *Placement) AssignVNodes(nodeCounts map[string]int) {
 	// 1. Initialize VNodes if this is Epoch 0
 	if len(p.VNodes) == 0 {
 		p.VNodes = InitializeVNodes()
+		log.Printf("[placement] initialized VNode ring with %d vnodes", VNodeCount)
 	}
 
 	// 2. Count current allocations
@@ -190,21 +191,26 @@ func (p *Placement) AssignVNodes(nodeCounts map[string]int) {
 		panic("Mismatch between orphaned VNodes and deficit counts")
 	}
 
+	reassignments := make([]string, 0)
 	for i, vnodeID := range orphanedVNodes {
-		p.VNodes[vnodeID].Primary = nodesNeeding[i]
-	}
-
-	finalCounts := make(map[string]int)
-	for _, v := range p.VNodes {
-		if v.Primary != "" {
-			finalCounts[v.Primary]++
-		}
-	}
-	for nodeID, cnt := range finalCounts {
-		log.Printf("placement: vnodes assigned node=%s count=%d", nodeID, cnt)
+		newOwner := nodesNeeding[i]
+		p.VNodes[vnodeID].Primary = newOwner
+		reassignments = append(reassignments, newOwner)
 	}
 
 	p.Epoch++
+
+	// Log vnode distribution
+	distribution := make(map[string]int)
+	for _, v := range p.VNodes {
+		if v.Primary != "" {
+			distribution[v.Primary]++
+		}
+	}
+	log.Printf("[placement] epoch=%d vnode distribution: %v", p.Epoch, distribution)
+	if len(reassignments) > 0 {
+		log.Printf("[placement] vnode reassignments: %d vnodes redistributed", len(reassignments))
+	}
 }
 
 func (p *Placement) AssignReplicas(metrics []NodeMetrics, rttMatrix map[string]map[string]float64, rf int) {
@@ -221,6 +227,10 @@ func (p *Placement) AssignReplicas(metrics []NodeMetrics, rttMatrix map[string]m
 		statsMap[m.NodeID] = m
 	}
 
+	// Track replica assignments for logging
+	replicaMap := make(map[string][]string) // primary -> replicas
+
+	assignmentCount := 0
 	for i := range p.VNodes {
 		v := &p.VNodes[i]
 		primaryID := v.Primary
@@ -282,6 +292,19 @@ func (p *Placement) AssignReplicas(metrics []NodeMetrics, rttMatrix map[string]m
 		for j := 0; j < rf-1 && j < len(candidates); j++ {
 			v.Replicas = append(v.Replicas, candidates[j].id)
 		}
+
+		// Track for summary logging
+		if _, exists := replicaMap[primaryID]; !exists {
+			replicaMap[primaryID] = v.Replicas
+		}
+
+		assignmentCount++
 	}
 
+	// Log replica assignments per primary node
+	for primary, replicas := range replicaMap {
+		log.Printf("[placement] %s will replicate to: %v", primary, replicas)
+	}
+
+	log.Printf("[placement] assigned replicas for %d vnodes with rf=%d", assignmentCount, rf)
 }

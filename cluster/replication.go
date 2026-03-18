@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"log"
-	"sort"
 
 	"strings"
 	"sync"
@@ -28,7 +27,12 @@ type Replicator struct {
 
 	plMu      sync.RWMutex
 	placement *Placement
-	memberSig string
+
+	metricsMu sync.RWMutex
+	metrics   []NodeMetrics
+	rttMatrix map[string]map[string]float64
+
+	updateMu sync.Mutex
 
 	ReplicationFactor int
 }
@@ -39,6 +43,8 @@ func NewReplicator(id string, ml *memberlist.Memberlist, rf int) *Replicator {
 		Ml:                ml,
 		peers:             make(map[string]pb.KVClient),
 		conns:             make(map[string]*grpc.ClientConn),
+		metrics:           []NodeMetrics{},
+		rttMatrix:         make(map[string]map[string]float64),
 		ReplicationFactor: rf,
 	}
 }
@@ -49,105 +55,77 @@ func (r *Replicator) SetPlacement(p *Placement) {
 	r.plMu.Unlock()
 }
 
-func (r *Replicator) RefreshPlacementNow() {
-	if r == nil || r.Ml == nil {
+func (r *Replicator) SetMetrics(metrics []NodeMetrics, rttMatrix map[string]map[string]float64) {
+	r.metricsMu.Lock()
+	defer r.metricsMu.Unlock()
+	r.metrics = append([]NodeMetrics{}, metrics...)
+	r.rttMatrix = make(map[string]map[string]float64)
+	for k, v := range rttMatrix {
+		r.rttMatrix[k] = v
+	}
+	log.Printf("[replicator] stored metrics for %d nodes", len(metrics))
+}
+
+func (r *Replicator) UpdatePlacement() {
+	if !r.updateMu.TryLock() {
+		log.Printf("[replicator] placement update already in progress, skipping duplicate trigger")
 		return
 	}
-	r.refreshPlacementFromMembership(r.Ml.Members())
-}
+	defer r.updateMu.Unlock()
 
-func (r *Replicator) defaultMetricForNode(nodeID string) NodeMetrics {
-	defaults := map[string]NodeMetrics{
-		"node-9999":  {NodeID: "node-9999", AvgRTT: 1.1, BandwidthMbps: 1000, NetUsage: 0.25},
-		"node-10000": {NodeID: "node-10000", AvgRTT: 1.5, BandwidthMbps: 900, NetUsage: 0.30},
-		"node-10001": {NodeID: "node-10001", AvgRTT: 2.0, BandwidthMbps: 800, NetUsage: 0.35},
-		"node-10002": {NodeID: "node-10002", AvgRTT: 1.3, BandwidthMbps: 950, NetUsage: 0.28},
-	}
-	if m, ok := defaults[nodeID]; ok {
-		return m
-	}
-	return NodeMetrics{NodeID: nodeID, AvgRTT: 1.5, BandwidthMbps: 900, NetUsage: 0.30}
-}
-
-func (r *Replicator) buildDemoRTTMatrix(nodeIDs []string) map[string]map[string]float64 {
-	overrides := map[string]map[string]float64{
-		"node-9999":  {"node-10000": 1.2, "node-10001": 1.9, "node-10002": 1.4},
-		"node-10000": {"node-9999": 1.2, "node-10001": 1.6, "node-10002": 1.1},
-		"node-10001": {"node-9999": 1.9, "node-10000": 1.6, "node-10002": 1.8},
-		"node-10002": {"node-9999": 1.4, "node-10000": 1.1, "node-10001": 1.8},
+	if r.Ml == nil {
+		log.Printf("[replicator] cannot update placement: memberlist is nil")
+		return
 	}
 
-	m := make(map[string]map[string]float64, len(nodeIDs))
-	for _, src := range nodeIDs {
-		m[src] = make(map[string]float64, len(nodeIDs)-1)
-		for _, dst := range nodeIDs {
-			if src == dst {
-				continue
-			}
-			val := 1.5
-			if row, ok := overrides[src]; ok {
-				if ov, ok := row[dst]; ok {
-					val = ov
-				}
-			}
-			m[src][dst] = val
-		}
+	// Get current cluster members
+	members := r.Ml.Members()
+	if len(members) == 0 {
+		log.Printf("[replicator] cannot update placement: no members in cluster")
+		return
 	}
-	return m
-}
 
-func (r *Replicator) refreshPlacementFromMembership(members []*memberlist.Node) {
-	nodeIDs := make([]string, 0, len(members))
-	seen := make(map[string]struct{}, len(members))
+	// Extract node IDs from memberlist
+	memberNodeIDs := make(map[string]bool)
 	for _, member := range members {
-		nodeID, _, err := parseMeta(member.Meta)
-		if err != nil || nodeID == "" {
-			continue
+		peerID, _, err := parseMeta(member.Meta)
+		if err != nil {
+			// Memberlist can surface nodes before metadata is fully propagated.
+			// Fall back to member.Name so placement can still track active members.
+			peerID = member.Name
+			log.Printf("[replicator] metadata unavailable for %s, using member name as node id", member.Name)
 		}
-		if _, ok := seen[nodeID]; ok {
-			continue
-		}
-		seen[nodeID] = struct{}{}
-		nodeIDs = append(nodeIDs, nodeID)
+		memberNodeIDs[peerID] = true
 	}
 
-	sort.Strings(nodeIDs)
-	if len(nodeIDs) == 0 {
+	r.metricsMu.RLock()
+	allMetrics := r.metrics
+	rttMatrix := r.rttMatrix
+	r.metricsMu.RUnlock()
+
+	// Filter metrics to only include nodes in current cluster
+	var activeMetrics []NodeMetrics
+	for _, m := range allMetrics {
+		if memberNodeIDs[m.NodeID] {
+			activeMetrics = append(activeMetrics, m)
+		}
+	}
+
+	if len(activeMetrics) == 0 {
+		log.Printf("[replicator] cannot update placement: no metrics found for active members")
 		return
 	}
 
-	sig := strings.Join(nodeIDs, ",")
-	r.plMu.RLock()
-	same := (sig == r.memberSig && r.placement != nil && len(r.placement.VNodes) == VNodeCount)
-	r.plMu.RUnlock()
-	if same {
-		return
-	}
+	log.Printf("[replicator] updating placement for %d active nodes: %v", len(activeMetrics), memberNodeIDs)
 
-	metrics := make([]NodeMetrics, 0, len(nodeIDs))
-	for _, nodeID := range nodeIDs {
-		metrics = append(metrics, r.defaultMetricForNode(nodeID))
-	}
-	rttMatrix := r.buildDemoRTTMatrix(nodeIDs)
-
-	scores := CalculateScores(metrics)
+	scores := CalculateScores(activeMetrics)
 	pl := &Placement{Nodes: scores}
 	counts := pl.GetTargetVNodeCount(scores)
 	pl.AssignVNodes(counts)
-	pl.AssignReplicas(metrics, rttMatrix, r.ReplicationFactor)
+	pl.AssignReplicas(activeMetrics, rttMatrix, r.ReplicationFactor)
 
-	r.plMu.Lock()
-	r.placement = pl
-	r.memberSig = sig
-	r.plMu.Unlock()
-
-	assigned := make(map[string]int)
-	for _, vnode := range pl.VNodes {
-		assigned[vnode.Primary]++
-	}
-	for nodeID, cnt := range assigned {
-		log.Printf("placement local-summary: node=%s vnodes=%d", nodeID, cnt)
-	}
+	r.SetPlacement(pl)
+	log.Printf("[replicator] placement updated (epoch=%d) with %d active nodes", pl.Epoch, len(scores))
 }
 
 func (r *Replicator) getPlacement() *Placement {
@@ -228,7 +206,6 @@ func (r *Replicator) ReplicateToAll(ctx context.Context, op pb.Op, key string, v
 	if len(members) == 0 {
 		return nil
 	}
-	r.refreshPlacementFromMembership(members)
 
 	// local primary write already succeeded before this function is called
 	acks := 1
@@ -250,8 +227,8 @@ func (r *Replicator) ReplicateToAll(ctx context.Context, op pb.Op, key string, v
 
 	pl := r.getPlacement()
 	if pl != nil && len(pl.VNodes) == VNodeCount {
-		primary, replicas := pl.GetNodesForKey(key)
-		log.Printf("replication plan: op=%s key=%q from=%s primary=%s will_replicate_to=%v", op.String(), key, r.ID, primary, replicas)
+		_, replicas := pl.GetNodesForKey(key)
+		log.Printf("[replicator] key=%q routes to replicas: %v", key, replicas)
 		seen := make(map[string]struct{})
 		for _, replicaID := range replicas {
 			if replicaID == "" || replicaID == r.ID {
@@ -274,7 +251,7 @@ func (r *Replicator) ReplicateToAll(ctx context.Context, op pb.Op, key string, v
 	}
 
 	if len(targets) == 0 {
-		log.Printf("replication route: op=%s key=%q from=%s fallback=membership", op.String(), key, r.ID)
+		log.Printf("[replicator] no placement targets, falling back to all members for key=%q", key)
 		for _, member := range members {
 			peerID, _, err := parseMeta(member.Meta)
 			if err != nil {
@@ -317,7 +294,6 @@ func (r *Replicator) ReplicateToAll(ctx context.Context, op pb.Op, key string, v
 		wg.Add(1)
 		go func(pid string, c pb.KVClient) {
 			defer wg.Done()
-			log.Printf("replication send: op=%s key=%q from=%s to=%s", op.String(), key, r.ID, pid)
 
 			cctx := callCtx
 			if _, hasDeadline := callCtx.Deadline(); !hasDeadline {
@@ -331,22 +307,23 @@ func (r *Replicator) ReplicateToAll(ctx context.Context, op pb.Op, key string, v
 				Value: value,
 			}
 
+			log.Printf("[replicator] sending replication request to %s: op=%v key=%q", pid, op, key)
 			_, err := c.Replicate(cctx, req)
 			if err == nil {
-				log.Printf("replication ack: op=%s key=%q from=%s to=%s", op.String(), key, r.ID, pid)
+				log.Printf("[replicator] replication to %s succeeded: key=%q", pid, key)
 				resultCh <- nil
 				return
 			}
-			log.Printf("replication retry-needed: op=%s key=%q from=%s to=%s err=%v", op.String(), key, r.ID, pid, err)
 
+			log.Printf("[replicator] replication to %s failed (will retry): key=%q error=%v", pid, key, err)
 			retryErr := retryReplication(pid, c, req, cctx)
 			if retryErr != nil {
-				log.Printf("replication failed: op=%s key=%q from=%s to=%s err=%v", op.String(), key, r.ID, pid, retryErr)
+				log.Printf("[replicator] replication to %s failed after retries: key=%q", pid, key)
 				resultCh <- fmt.Errorf("replicate to %s failed after retries: %w", pid, retryErr)
 				return
 			}
-			log.Printf("replication ack-after-retry: op=%s key=%q from=%s to=%s", op.String(), key, r.ID, pid)
 
+			log.Printf("[replicator] replication to %s succeeded after retries: key=%q", pid, key)
 			resultCh <- nil
 		}(t.id, t.client)
 	}
@@ -401,7 +378,6 @@ func retryReplication(pid string, c pb.KVClient, req *pb.ReplicationRequest, cct
 	var lastErr error
 
 	for attempt := 0; attempt < maxAttempts; attempt++ {
-		log.Printf("replication retry: attempt=%d key=%q to=%s", attempt+1, req.Key, pid)
 		select {
 		case <-cctx.Done():
 			return fmt.Errorf("context cancelled while retrying replication to %s: %w", pid, cctx.Err())

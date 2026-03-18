@@ -32,7 +32,7 @@ func (d *nodeEventDelegate) NotifyJoin(n *memberlist.Node) {
 	}
 	log.Printf("membership event: join name=%s addr=%s", n.Name, n.Address())
 	if d.node.OnMembershipChanged != nil {
-		d.node.OnMembershipChanged()
+		go d.node.OnMembershipChanged()
 	}
 }
 
@@ -42,7 +42,7 @@ func (d *nodeEventDelegate) NotifyLeave(n *memberlist.Node) {
 	}
 	log.Printf("membership event: leave name=%s addr=%s", n.Name, n.Address())
 	if d.node.OnMembershipChanged != nil {
-		d.node.OnMembershipChanged()
+		go d.node.OnMembershipChanged()
 	}
 }
 
@@ -52,7 +52,7 @@ func (d *nodeEventDelegate) NotifyUpdate(n *memberlist.Node) {
 	}
 	log.Printf("membership event: update name=%s addr=%s", n.Name, n.Address())
 	if d.node.OnMembershipChanged != nil {
-		d.node.OnMembershipChanged()
+		go d.node.OnMembershipChanged()
 	}
 }
 
@@ -98,6 +98,7 @@ func (n *Node) CreateCluster() error {
 	cfg.Delegate = n
 	cfg.Events = &nodeEventDelegate{node: n}
 	cfg.AdvertisePort = n.GossipBindPort
+	log.Printf("memberlist: creation config bind=%s:%d advertise=%s:%d", cfg.BindAddr, cfg.BindPort, cfg.AdvertiseAddr, cfg.AdvertisePort)
 	ml, err := memberlist.Create(cfg)
 	if err != nil {
 		return err

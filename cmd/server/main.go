@@ -3,10 +3,8 @@ package main
 import (
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"path/filepath"
-	"time"
 
 	"github.com/AymenBenyoub/nawst/cluster"
 	"github.com/AymenBenyoub/nawst/core"
@@ -17,14 +15,9 @@ func main() {
 	var ack = flag.Int("ack", 1, "ack mode: 0=after enqueue, 1=after flush, 2=after fsync")
 	var gossipPort = flag.Int("gossip-port", 0, "memberlist gossip port (0 selects random port on non-seed node)")
 	var seedGossipAddr = flag.String("seed-gossip-addr", "127.0.0.1:7946", "seed node memberlist address")
-	var gossipBindAddr = flag.String("gossip-bind-addr", "0.0.0.0", "memberlist bind address")
-	var advertiseIP = flag.String("advertise-ip", "127.0.0.1", "IP to advertise to peers (must be reachable by other nodes)")
-	var rpcAdvertiseHost = flag.String("rpc-advertise-host", "", "host/IP peers should use for gRPC replication (default: advertise-ip)")
 
 	var walDir = flag.String("wal-dir", "", "directory for WAL files (default: kvst/node-<rpc-port>)")
 	var replicationFactor = flag.Int("rf", 3, "replication factor for the cluster")
-	var joinRetries = flag.Int("join-retries", 5, "number of initial retries to join seed node")
-	var joinRetryInterval = flag.Duration("join-retry-interval", 2*time.Second, "interval between seed join retries")
 	flag.Parse()
 	const writerBufferSize = 64 * 1024
 	const requestChannelSize = 10000
@@ -71,17 +64,9 @@ func main() {
 
 	server := core.NewServer(reqCh)
 	nodeID := fmt.Sprintf("node-%d", *rpc_port)
-	rpcHost := *rpcAdvertiseHost
-	if rpcHost == "" {
-		rpcHost = *advertiseIP
-	}
-
 	resolvedGossipPort := *gossipPort
 	if resolvedGossipPort == 0 && *rpc_port == 9999 {
 		resolvedGossipPort = 7946
-	} else if resolvedGossipPort == 0 {
-		// Deterministic default for non-seed nodes avoids hard-to-debug random ports.
-		resolvedGossipPort = 7946 + (*rpc_port - 9999)
 	}
 	// host, err := os.Hostname()
 	// if err != nil {
@@ -89,50 +74,52 @@ func main() {
 	// }
 	Node := &cluster.Node{
 		ID:                nodeID,
-		RPCAddr:           fmt.Sprintf("%s:%d", rpcHost, *rpc_port),
+		RPCAddr:           fmt.Sprintf("%s:%d", "127.0.0.1", *rpc_port),
 		Ml:                nil,
 		EventLoop:         eventLoop,
 		Server:            server,
 		HealthScore:       0.75,
-		GossipBindAddr:    *gossipBindAddr,
+		GossipBindAddr:    "0.0.0.0",
 		GossipBindPort:    resolvedGossipPort,
-		GossipAdvertiseIP: *advertiseIP,
+		GossipAdvertiseIP: "127.0.0.1",
 	}
 	if err := Node.CreateCluster(); err != nil {
 		panic(err)
 	}
-	log.Printf("membership: local node=%s gossip=%s:%d seed=%s", nodeID, Node.GossipAdvertiseIP, Node.GossipBindPort, *seedGossipAddr)
-	if *rpc_port != 9999 {
-		joined := false
-		for attempt := 1; attempt <= *joinRetries; attempt++ {
-			if err := Node.JoinCluster(*seedGossipAddr); err == nil {
-				log.Printf("membership: joined seed=%s on attempt=%d", *seedGossipAddr, attempt)
-				joined = true
-				break
-			} else {
-				log.Printf("membership: join attempt=%d failed seed=%s err=%v", attempt, *seedGossipAddr, err)
-				if attempt < *joinRetries {
-					time.Sleep(*joinRetryInterval)
-				}
-			}
-		}
+	replicator := cluster.NewReplicator(nodeID, Node.Ml, *replicationFactor)
 
-		if !joined {
-			log.Printf("membership: continuing without seed for now; will retry in background")
-			go func() {
-				for {
-					time.Sleep(*joinRetryInterval)
-					if err := Node.JoinCluster(*seedGossipAddr); err == nil {
-						log.Printf("membership: background join succeeded seed=%s", *seedGossipAddr)
-						return
-					}
-				}
-			}()
+	// Set up membership callback before any join so join events are handled.
+	Node.OnMembershipChanged = func() {
+		fmt.Println("[main] membership changed, updating placement...")
+		replicator.UpdatePlacement()
+	}
+
+	if *rpc_port != 9999 {
+		if err := Node.JoinCluster(*seedGossipAddr); err != nil {
+			panic(err)
 		}
 	}
-	replicator := cluster.NewReplicator(nodeID, Node.Ml, *replicationFactor)
-	Node.OnMembershipChanged = replicator.RefreshPlacementNow
-	replicator.RefreshPlacementNow()
+
+	// Demo metrics and RTT matrix - will be used for placement updates
+	demoMetrics := []cluster.NodeMetrics{
+		{NodeID: "node-9999", AvgRTT: 1.1, BandwidthMbps: 1000, NetUsage: 0.25},
+		{NodeID: "node-10000", AvgRTT: 1.5, BandwidthMbps: 900, NetUsage: 0.30},
+		{NodeID: "node-10001", AvgRTT: 2.0, BandwidthMbps: 800, NetUsage: 0.35},
+		{NodeID: "node-10002", AvgRTT: 1.3, BandwidthMbps: 950, NetUsage: 0.28},
+	}
+	demoRTT := map[string]map[string]float64{
+		"node-9999":  {"node-10000": 1.2, "node-10001": 1.9, "node-10002": 1.4},
+		"node-10000": {"node-9999": 1.2, "node-10001": 1.6, "node-10002": 1.1},
+		"node-10001": {"node-9999": 1.9, "node-10000": 1.6, "node-10002": 1.8},
+		"node-10002": {"node-9999": 1.4, "node-10000": 1.1, "node-10001": 1.8},
+	}
+
+	// Store metrics in replicator for dynamic placement updates
+	replicator.SetMetrics(demoMetrics, demoRTT)
+
+	// Trigger initial placement update
+	fmt.Println("[main] triggering initial placement update...")
+	replicator.UpdatePlacement()
 
 	server.Replicator = replicator
 	defer replicator.Close()

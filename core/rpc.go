@@ -4,16 +4,15 @@ import (
 	"context"
 	"errors"
 	"io"
-
-	"sync/atomic"
-	"time"
-
 	"log"
+
 	"net"
 	"os"
 	"os/signal"
 	"strconv"
+	"sync/atomic"
 	"syscall"
+	"time"
 
 	pb "github.com/AymenBenyoub/nawst/core/proto"
 	"google.golang.org/grpc"
@@ -92,6 +91,7 @@ func (s *Server) sendRequest(ctx context.Context, req Request) Response {
 
 // gRPC Put RPC
 func (s *Server) Put(ctx context.Context, req *pb.PutRequest) (*emptypb.Empty, error) {
+
 	resp := s.sendRequest(ctx, Request{
 		Op:           OpPut,
 		Key:          req.Key,
@@ -115,6 +115,7 @@ func (s *Server) Put(ctx context.Context, req *pb.PutRequest) (*emptypb.Empty, e
 
 // gRPC Get RPC
 func (s *Server) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, error) {
+
 	resp := s.sendRequest(ctx, Request{
 		Op:           OpGet,
 		Key:          req.Key,
@@ -131,6 +132,7 @@ func (s *Server) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, 
 
 // gRPC Delete RPC
 func (s *Server) Delete(ctx context.Context, req *pb.DeleteRequest) (*emptypb.Empty, error) {
+
 	resp := s.sendRequest(ctx, Request{
 		Op:           OpDelete,
 		Key:          req.Key,
@@ -140,6 +142,7 @@ func (s *Server) Delete(ctx context.Context, req *pb.DeleteRequest) (*emptypb.Em
 		return nil, status.Errorf(codes.Internal, "Failed to delete key: %v", resp.Err)
 	}
 	if s.Replicator != nil {
+
 		repCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 		if err := s.Replicator.ReplicateToAll(repCtx, pb.Op_DELETE, req.Key, nil); err != nil {
 			cancel()
@@ -151,7 +154,8 @@ func (s *Server) Delete(ctx context.Context, req *pb.DeleteRequest) (*emptypb.Em
 	return &emptypb.Empty{}, nil
 }
 func (s *Server) Replicate(ctx context.Context, req *pb.ReplicationRequest) (*emptypb.Empty, error) {
-	log.Printf("replication recv: op=%s key=%q value_bytes=%d", req.Op.String(), req.Key, len(req.Value))
+	log.Printf("[replicator] received replication request: op=%v key=%q", req.Op, req.Key)
+
 	var op OpType
 	if req.Op == pb.Op_PUT {
 		op = OpPut
@@ -170,6 +174,8 @@ func (s *Server) Replicate(ctx context.Context, req *pb.ReplicationRequest) (*em
 	if resp.Err != nil {
 		return nil, status.Errorf(codes.Internal, "Replication failed: %v", resp.Err)
 	}
+
+	log.Printf("[replicator] applied replicated request: op=%v key=%q", req.Op, req.Key)
 	return &emptypb.Empty{}, nil
 }
 func (s *Server) StreamKV(stream pb.KV_StreamKVServer) error {
