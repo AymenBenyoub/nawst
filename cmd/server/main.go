@@ -12,8 +12,11 @@ import (
 
 func main() {
 	var rpc_port = flag.Int("rpc-port", 9999, "grpc server port")
+	var rpcHost = flag.String("rpc-host", "127.0.0.1", "grpc advertise host/ip used by peers")
 	var ack = flag.Int("ack", 1, "ack mode: 0=after enqueue, 1=after flush, 2=after fsync")
+	var gossipBindAddr = flag.String("gossip-bind-addr", "0.0.0.0", "memberlist bind address")
 	var gossipPort = flag.Int("gossip-port", 0, "memberlist gossip port (0 selects random port on non-seed node)")
+	var gossipAdvertiseIP = flag.String("gossip-advertise-ip", "127.0.0.1", "memberlist advertise IP used by peers")
 	var seedGossipAddr = flag.String("seed-gossip-addr", "127.0.0.1:7946", "seed node memberlist address")
 
 	var walDir = flag.String("wal-dir", "", "directory for WAL files (default: kvst/node-<rpc-port>)")
@@ -74,14 +77,14 @@ func main() {
 	// }
 	Node := &cluster.Node{
 		ID:                nodeID,
-		RPCAddr:           fmt.Sprintf("%s:%d", "127.0.0.1", *rpc_port),
+		RPCAddr:           fmt.Sprintf("%s:%d", *rpcHost, *rpc_port),
 		Ml:                nil,
 		EventLoop:         eventLoop,
 		Server:            server,
 		HealthScore:       0.75,
-		GossipBindAddr:    "0.0.0.0",
+		GossipBindAddr:    *gossipBindAddr,
 		GossipBindPort:    resolvedGossipPort,
-		GossipAdvertiseIP: "127.0.0.1",
+		GossipAdvertiseIP: *gossipAdvertiseIP,
 	}
 	if err := Node.CreateCluster(); err != nil {
 		panic(err)
@@ -102,16 +105,16 @@ func main() {
 
 	// Demo metrics and RTT matrix - will be used for placement updates
 	demoMetrics := []cluster.NodeMetrics{
-		{NodeID: "node-9", AvgRTT: 1.1, BandwidthMbps: 1000, NetUsage: 0.25},
-		{NodeID: "node-10", AvgRTT: 1.5, BandwidthMbps: 900, NetUsage: 0.30},
-		{NodeID: "node-11", AvgRTT: 2.0, BandwidthMbps: 800, NetUsage: 0.35},
-		{NodeID: "node-12", AvgRTT: 28.6, BandwidthMbps: 90, NetUsage: 0.68},
+		{NodeID: "node-9999", AvgRTT: 1.1, BandwidthMbps: 1000, NetUsage: 0.25},
+		{NodeID: "node-10000", AvgRTT: 1.5, BandwidthMbps: 900, NetUsage: 0.30},
+		{NodeID: "node-10001", AvgRTT: 2.0, BandwidthMbps: 800, NetUsage: 0.35},
+		{NodeID: "node-10002", AvgRTT: 28.6, BandwidthMbps: 90, NetUsage: 0.68},
 	}
 	demoRTT := map[string]map[string]float64{
-		"node-9":  {"node-10": 1.2, "node-11": 1.9, "node-12": 1.4},
-		"node-1": {"node-9": 1.2, "node-11": 1.6, "node-12": 1.1},
-		"node-11": {"node-9": 1.9, "node-10": 1.6, "node-12": 1.8},
-		"node-12": {"node-9": 50, "node-10": 20, "node-11": 16},
+		"node-9999":  {"node-10000": 1.2, "node-10001": 1.9, "node-10002": 1.4},
+		"node-10000": {"node-9999": 1.2, "node-10001": 1.6, "node-10002": 1.1},
+		"node-10001": {"node-9999": 1.9, "node-10000": 1.6, "node-10002": 1.8},
+		"node-10002": {"node-9999": 50, "node-10000": 20, "node-10001": 16},
 	}
 
 	// Store metrics in replicator for dynamic placement updates
