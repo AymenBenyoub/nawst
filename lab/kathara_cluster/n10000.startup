@@ -4,10 +4,10 @@ set -e
 ip addr add 10.0.0.10/24 dev eth0
 ip link set eth0 up
 
-chmod +x /shared/bin/server
+chmod +x /shared/bin/kvserver
 mkdir -p /tmp/kvst
 
-/shared/bin/server \
+exec /shared/bin/kvserver \
   -rpc-port 10000 \
   -rpc-host 10.0.0.10 \
   -gossip-bind-addr 0.0.0.0 \
@@ -15,6 +15,6 @@ mkdir -p /tmp/kvst
   -gossip-advertise-ip 10.0.0.10 \
   -seed-gossip-addr 10.0.0.9:7946 \
   -rf 3 \
-  > /tmp/kvst/server.log 2>&1 &
+
 
 echo "n10000 started: rpc=10.0.0.10:10000 gossip=10.0.0.10:7947"
