@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"maps"
 	"context"
 	"errors"
 	"fmt"
@@ -60,9 +61,7 @@ func (r *Replicator) SetMetrics(metrics []NodeMetrics, rttMatrix map[string]map[
 	defer r.metricsMu.Unlock()
 	r.metrics = append([]NodeMetrics{}, metrics...)
 	r.rttMatrix = make(map[string]map[string]float64)
-	for k, v := range rttMatrix {
-		r.rttMatrix[k] = v
-	}
+	maps.Copy(r.rttMatrix, rttMatrix)
 	log.Printf("[replicator] stored metrics for %d nodes", len(metrics))
 }
 

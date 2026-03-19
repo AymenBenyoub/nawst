@@ -81,7 +81,7 @@ func main() {
 		Ml:                nil,
 		EventLoop:         eventLoop,
 		Server:            server,
-		HealthScore:       0.75,
+	
 		GossipBindAddr:    *gossipBindAddr,
 		GossipBindPort:    resolvedGossipPort,
 		GossipAdvertiseIP: *gossipAdvertiseIP,
@@ -105,15 +105,15 @@ func main() {
 
 	// Demo metrics and RTT matrix - will be used for placement updates
 	demoMetrics := []cluster.NodeMetrics{
-		{NodeID: "node-9999", AvgRTT: 1.1, BandwidthMbps: 1000, NetUsage: 0.25},
+		{NodeID: "node-9999", AvgRTT: 1.1, BandwidthMbps: 950, NetUsage: 0.3},
 		{NodeID: "node-10000", AvgRTT: 1.5, BandwidthMbps: 900, NetUsage: 0.30},
-		{NodeID: "node-10001", AvgRTT: 2.0, BandwidthMbps: 800, NetUsage: 0.35},
-		{NodeID: "node-10002", AvgRTT: 28.6, BandwidthMbps: 90, NetUsage: 0.68},
+		{NodeID: "node-10001", AvgRTT: 2.0, BandwidthMbps: 800, NetUsage: 0.4},
+		{NodeID: "node-10002", AvgRTT: 28.6, BandwidthMbps: 210, NetUsage: 0.85},
 	}
 	demoRTT := map[string]map[string]float64{
-		"node-9999":  {"node-10000": 1.2, "node-10001": 1.9, "node-10002": 1.4},
-		"node-10000": {"node-9999": 1.2, "node-10001": 1.6, "node-10002": 1.1},
-		"node-10001": {"node-9999": 1.9, "node-10000": 1.6, "node-10002": 1.8},
+		"node-9999":  {"node-10000": 15, "node-10001": 11, "node-10002": 10},
+		"node-10000": {"node-9999": 12, "node-10001": 15, "node-10002": 62},
+		"node-10001": {"node-9999": 10, "node-10000": 16, "node-10002": 18},
 		"node-10002": {"node-9999": 50, "node-10000": 20, "node-10001": 16},
 	}
 
