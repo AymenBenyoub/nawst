@@ -24,7 +24,10 @@ import (
 
 type Replicator interface {
 	ReplicateToAll(ctx context.Context, op pb.Op, key string, value []byte) error
+	CheckOwnership(key string) (bool, string)
+	ForwardToOwner(ctx context.Context, owner string, req any ) error
 }
+
 type Server struct {
 	pb.UnimplementedKVServer
 	reqCh      chan<- Request
@@ -91,26 +94,35 @@ func (s *Server) sendRequest(ctx context.Context, req Request) Response {
 
 // gRPC Put RPC
 func (s *Server) Put(ctx context.Context, req *pb.PutRequest) (*emptypb.Empty, error) {
-
-	resp := s.sendRequest(ctx, Request{
-		Op:           OpPut,
-		Key:          req.Key,
-		Value:        req.Value,
-		ResponseChan: make(chan Response, 1),
-	})
-	if resp.Err != nil {
-		return nil, status.Errorf(codes.Internal, "Failed to put key: %v", resp.Err)
-	}
-	if s.Replicator != nil {
-		repCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		if err := s.Replicator.ReplicateToAll(repCtx, pb.Op_PUT, req.Key, req.Value); err != nil {
-			cancel()
-			return nil, status.Errorf(codes.Internal, "Failed to replicate put: %v", err)
+	ok, owner := s.Replicator.CheckOwnership(req.Key)
+	if !ok {
+		err := s.Replicator.ForwardToOwner(ctx, owner,req)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "Failed to forward PUT to owner %s: %v", owner, err)
 		}
+		log.Printf("Forwarded PUT request for key %q to owner %s", req.Key, owner)
+		return &emptypb.Empty{}, nil
+	} else {
+		resp := s.sendRequest(ctx, Request{
+			Op:           OpPut,
+			Key:          req.Key,
+			Value:        req.Value,
+			ResponseChan: make(chan Response, 1),
+		})
+		if resp.Err != nil {
+			return nil, status.Errorf(codes.Internal, "Failed to PUT key: %v", resp.Err)
+		}
+		if s.Replicator != nil {
+			repCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			if err := s.Replicator.ReplicateToAll(repCtx, pb.Op_PUT, req.Key, req.Value); err != nil {
+				cancel()
+				return nil, status.Errorf(codes.Internal, "Failed to replicate PUT: %v", err)
+			}
 
-		cancel()
+			cancel()
+		}
+		return &emptypb.Empty{}, nil
 	}
-	return &emptypb.Empty{}, nil
 }
 
 // gRPC Get RPC
@@ -125,33 +137,43 @@ func (s *Server) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, 
 		if errors.Is(resp.Err, ErrKeyNotFound) {
 			return nil, status.Error(codes.NotFound, "Key not found")
 		}
-		return nil, status.Errorf(codes.Internal, "Failed to get key: %v", resp.Err)
+		return nil, status.Errorf(codes.Internal, "Failed to GET key: %v", resp.Err)
 	}
 	return &pb.GetResponse{Value: resp.Value}, nil
 }
 
 // gRPC Delete RPC
 func (s *Server) Delete(ctx context.Context, req *pb.DeleteRequest) (*emptypb.Empty, error) {
+	ok, owner := s.Replicator.CheckOwnership(req.Key)
+	if !ok {
+		err := s.Replicator.ForwardToOwner(ctx, owner,req)
 
-	resp := s.sendRequest(ctx, Request{
-		Op:           OpDelete,
-		Key:          req.Key,
-		ResponseChan: make(chan Response, 1),
-	})
-	if resp.Err != nil {
-		return nil, status.Errorf(codes.Internal, "Failed to delete key: %v", resp.Err)
-	}
-	if s.Replicator != nil {
-
-		repCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-		if err := s.Replicator.ReplicateToAll(repCtx, pb.Op_DELETE, req.Key, nil); err != nil {
-			cancel()
-			return nil, status.Errorf(codes.Internal, "Failed to replicate delete: %v", err)
+		if err != nil {
+			return nil, status.Errorf(codes.Internal, "Failed to forward DELETE to owner %s: %v", owner, err)
 		}
+		log.Printf("Forwarded DELETE request for key %q to owner %s", req.Key, owner)
+		return &emptypb.Empty{}, nil
+	} else {
+		resp := s.sendRequest(ctx, Request{
+			Op:           OpDelete,
+			Key:          req.Key,
+			ResponseChan: make(chan Response, 1),
+		})
+		if resp.Err != nil {
+			return nil, status.Errorf(codes.Internal, "Failed to DELETE key: %v", resp.Err)
+		}
+		if s.Replicator != nil {
 
-		cancel()
+			repCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+			if err := s.Replicator.ReplicateToAll(repCtx, pb.Op_DELETE, req.Key, nil); err != nil {
+				cancel()
+				return nil, status.Errorf(codes.Internal, "Failed to REPLICATE DELETE: %v", err)
+			}
+
+			cancel()
+		}
+		return &emptypb.Empty{}, nil
 	}
-	return &emptypb.Empty{}, nil
 }
 func (s *Server) Replicate(ctx context.Context, req *pb.ReplicationRequest) (*emptypb.Empty, error) {
 	log.Printf("[replicator] received replication request: op=%v key=%q", req.Op, req.Key)

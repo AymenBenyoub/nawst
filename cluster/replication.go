@@ -1,11 +1,11 @@
 package cluster
 
 import (
-	"maps"
 	"context"
 	"errors"
 	"fmt"
 	"log"
+	"maps"
 
 	"strings"
 	"sync"
@@ -425,7 +425,31 @@ func retryReplication(pid string, c pb.KVClient, req *pb.ReplicationRequest, cct
 
 	return fmt.Errorf("retry replication to %s exhausted: %w", pid, lastErr)
 }
+func (r *Replicator) CheckOwnership(key string) (bool, string) {
+	owner, _ := r.placement.GetNodesForKey(key)
+	return strings.EqualFold(owner, r.ID), owner
+}
 
+func (r *Replicator) ForwardToOwner(ctx context.Context, owner string, req any) error {
+	client, err := r.getOrCreateClientByNodeID(owner)
+	if err != nil {
+		return err
+	}
+	switch req := req.(type) {
+	case *pb.PutRequest:
+		_, err := client.Put(ctx, req)
+		if err != nil {
+			return err
+		}
+
+	case *pb.DeleteRequest:
+		_, err := client.Delete(ctx, req)
+		if err != nil {
+			return err
+		}
+	}
+	return nil
+}
 func (r *Replicator) Close() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()

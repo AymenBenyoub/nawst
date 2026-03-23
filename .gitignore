@@ -5,3 +5,4 @@ kvcli
 kvserver
 stress
 kvserver_default
+context.md
