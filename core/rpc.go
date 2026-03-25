@@ -25,7 +25,7 @@ import (
 type Replicator interface {
 	ReplicateToAll(ctx context.Context, op pb.Op, key string, value []byte) error
 	CheckOwnership(key string) (bool, string)
-	ForwardToOwner(ctx context.Context, owner string, req any ) error
+	ForwardToOwner(ctx context.Context, owner string, req any) ([]byte, error)
 }
 
 type Server struct {
@@ -96,7 +96,7 @@ func (s *Server) sendRequest(ctx context.Context, req Request) Response {
 func (s *Server) Put(ctx context.Context, req *pb.PutRequest) (*emptypb.Empty, error) {
 	ok, owner := s.Replicator.CheckOwnership(req.Key)
 	if !ok {
-		err := s.Replicator.ForwardToOwner(ctx, owner,req)
+		_, err := s.Replicator.ForwardToOwner(ctx, owner, req)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "Failed to forward PUT to owner %s: %v", owner, err)
 		}
@@ -126,6 +126,7 @@ func (s *Server) Put(ctx context.Context, req *pb.PutRequest) (*emptypb.Empty, e
 }
 
 // gRPC Get RPC
+// TODO: serve GETs only if we are the owner, OR allow replica reads with some version/timestamp check (right now it returns the value if it finds it locally, whether it's supposed to own it, replicate it or not)
 func (s *Server) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, error) {
 
 	resp := s.sendRequest(ctx, Request{
@@ -135,7 +136,16 @@ func (s *Server) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, 
 	})
 	if resp.Err != nil {
 		if errors.Is(resp.Err, ErrKeyNotFound) {
-			return nil, status.Error(codes.NotFound, "Key not found")
+			_, owner := s.Replicator.CheckOwnership(req.Key)
+			if owner != "" {
+				val, err := s.Replicator.ForwardToOwner(ctx, owner, req)
+				if err != nil {
+					return nil, status.Errorf(codes.Internal, "Failed to forward GET to owner %s: %v", owner, err)
+				}
+				log.Printf("Forwarded GET request for key %q to owner %s", req.Key, owner)
+				return &pb.GetResponse{Value: val}, nil
+
+			}
 		}
 		return nil, status.Errorf(codes.Internal, "Failed to GET key: %v", resp.Err)
 	}
@@ -146,7 +156,7 @@ func (s *Server) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, 
 func (s *Server) Delete(ctx context.Context, req *pb.DeleteRequest) (*emptypb.Empty, error) {
 	ok, owner := s.Replicator.CheckOwnership(req.Key)
 	if !ok {
-		err := s.Replicator.ForwardToOwner(ctx, owner,req)
+		_, err := s.Replicator.ForwardToOwner(ctx, owner, req)
 
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "Failed to forward DELETE to owner %s: %v", owner, err)

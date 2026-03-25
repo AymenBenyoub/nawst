@@ -461,7 +461,7 @@ func retryReplication(pid string, c pb.KVClient, req *pb.ReplicationRequest, cct
 
 	var lastErr error
 
-	for attempt := 0; attempt < maxAttempts; attempt++ {
+	for attempt := range maxAttempts {
 		select {
 		case <-cctx.Done():
 			return fmt.Errorf("context cancelled while retrying replication to %s: %w", pid, cctx.Err())
@@ -553,25 +553,35 @@ func (r *Replicator) ReconcileRaftWithMembership(members []*memberlist.Node) err
 	return nil
 }
 
-func (r *Replicator) ForwardToOwner(ctx context.Context, owner string, req any) error {
+func (r *Replicator) ForwardToOwner(ctx context.Context, owner string, req any) ([]byte, error) {
 	client, err := r.getOrCreateClientByNodeID(owner)
+	var val []byte = nil
 	if err != nil {
-		return err
+		return nil, err
 	}
 	switch req := req.(type) {
 	case *pb.PutRequest:
 		_, err := client.Put(ctx, req)
 		if err != nil {
-			return err
+			return nil, err
 		}
 
 	case *pb.DeleteRequest:
 		_, err := client.Delete(ctx, req)
 		if err != nil {
-			return err
+			return nil, err
 		}
+	case *pb.GetRequest:
+		resp, err := client.Get(ctx, req)
+		if err != nil {
+			return nil, err
+		}
+		val = resp.Value
+
+	default:
+		return nil, fmt.Errorf("unsupported request type: %T", req)
 	}
-	return nil
+	return val, nil
 }
 func (r *Replicator) Close() error {
 	r.mu.Lock()
