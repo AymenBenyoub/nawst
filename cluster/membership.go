@@ -3,6 +3,7 @@ package cluster
 import (
 	"fmt"
 	"log"
+	"sync"
 	"time"
 
 	"github.com/AymenBenyoub/nawst/core"
@@ -10,57 +11,160 @@ import (
 )
 
 type Node struct {
-	ID                  string
-	RPCAddr             string
-	Ml                  *memberlist.Memberlist
-	EventLoop           *core.EventLoop
-	Server              *core.Server
+	ID        string
+	RPCAddr   string
+	RaftAddr  string
+	Ml        *memberlist.Memberlist
+	EventLoop *core.EventLoop
+	Server    *core.Server
+
 	OnMembershipChanged func()
 	HealthScore         float32
 	GossipBindAddr      string
 	GossipBindPort      int
 	GossipAdvertiseIP   string
+
+	//control fields
+	Reconciler       Reconciler
+	MembershipEvents chan MembershipEvent
+	reconcileCh      chan struct{}
+	stopCh           chan struct{}
+	wg               sync.WaitGroup
 }
 
+type Reconciler interface {
+	IsLeader() bool
+	ReconcileRaftWithMembership(members []*memberlist.Node) error
+}
+type MembershipEventType int
+
+const (
+	MembershipJoin MembershipEventType = iota
+	MembershipLeave
+	MembershipUpdate
+)
+
+type MembershipEvent struct {
+	Type   MembershipEventType
+	NodeID string
+	Addr   string
+	At     time.Time
+}
 type nodeEventDelegate struct {
 	node *Node
 }
 
+func (n *Node) StartControlChannels() {
+	if n.MembershipEvents == nil {
+		n.MembershipEvents = make(chan MembershipEvent, 100)
+	}
+	if n.reconcileCh == nil {
+		n.reconcileCh = make(chan struct{}, 1)
+	}
+	if n.stopCh == nil {
+		n.stopCh = make(chan struct{})
+	}
+}
+func (n *Node) EnqueueMembershipEvent(event MembershipEvent) {
+	select {
+	case n.MembershipEvents <- event:
+	default:
+		log.Printf("membership event channel is full, dropping event: %d - node: %s", event.Type, event.NodeID)
+	}
+}
+func (n *Node) signalReconcile() {
+	select {
+	case n.reconcileCh <- struct{}{}:
+	default:
+	}
+}
+func (n *Node) StartMembershipWorkers() {
+	n.StartControlChannels()
+	n.wg.Add(2)
+	go n.membershipLoop()
+	go n.reconcileLoop()
+}
+func (n *Node) StopMembershipWorkers() {
+	close(n.stopCh)
+	n.wg.Wait()
+}
+func (n *Node) membershipLoop() {
+	defer n.wg.Done()
+	for {
+		select {
+		case <-n.stopCh:
+			return
+		case event := <-n.MembershipEvents:
+			log.Printf("membership event: %d - node: %s - addr: %s", event.Type, event.NodeID, event.Addr)
+			n.signalReconcile()
+		}
+	}
+}
+func (n *Node) reconcileLoop() {
+	defer n.wg.Done()
+	for {
+		select {
+		case <-n.stopCh:
+			return
+		case <-n.reconcileCh:
+			if n.Ml == nil || n.Reconciler == nil {
+				continue
+			}
+			if !n.Reconciler.IsLeader() {
+				continue
+			}
+			members := n.Ml.Members()
+			if err := n.Reconciler.ReconcileRaftWithMembership(members); err != nil {
+				log.Printf("error reconciling raft with membership: %v", err)
+			}
+
+		}
+	}
+}
 func (d *nodeEventDelegate) NotifyJoin(n *memberlist.Node) {
 	if d == nil || d.node == nil {
 		return
 	}
-	log.Printf("membership event: join name=%s addr=%s", n.Name, n.Address())
-	if d.node.OnMembershipChanged != nil {
-		go d.node.OnMembershipChanged()
-	}
+	d.node.EnqueueMembershipEvent(MembershipEvent{
+		Type:   MembershipJoin,
+		NodeID: n.Name,
+		Addr:   n.Address(),
+		At:     time.Now(),
+	})
 }
 
 func (d *nodeEventDelegate) NotifyLeave(n *memberlist.Node) {
 	if d == nil || d.node == nil {
 		return
 	}
-	log.Printf("membership event: leave name=%s addr=%s", n.Name, n.Address())
-	if d.node.OnMembershipChanged != nil {
-		go d.node.OnMembershipChanged()
-	}
+	d.node.EnqueueMembershipEvent(MembershipEvent{
+		Type:   MembershipLeave,
+		NodeID: n.Name,
+		Addr:   n.Address(),
+		At:     time.Now(),
+	})
 }
 
 func (d *nodeEventDelegate) NotifyUpdate(n *memberlist.Node) {
 	if d == nil || d.node == nil {
 		return
 	}
-	log.Printf("membership event: update name=%s addr=%s", n.Name, n.Address())
-	if d.node.OnMembershipChanged != nil {
-		go d.node.OnMembershipChanged()
-	}
+	d.node.EnqueueMembershipEvent(MembershipEvent{
+		Type:   MembershipUpdate,
+		NodeID: n.Name,
+		Addr:   n.Address(),
+		At:     time.Now(),
+	})
 }
 
 // memberlist.Delgate interface implementation, for now i only need
 // NodeMeta to share grpc address for replication, others may be used
 // later on.
 func (n *Node) NodeMeta(limit int) []byte {
-	return fmt.Appendf(nil, "%s:%s", n.ID, n.RPCAddr)
+	if n.RaftAddr == "" {
+		return fmt.Appendf(nil, "%s,%s", n.ID, n.RPCAddr)
+	}
+	return fmt.Appendf(nil, "%s,%s,%s", n.ID, n.RPCAddr, n.RaftAddr)
 }
 func (n *Node) NotifyMsg(b []byte) {
 

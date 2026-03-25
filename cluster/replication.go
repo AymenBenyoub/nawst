@@ -13,6 +13,7 @@ import (
 
 	pb "github.com/AymenBenyoub/nawst/core/proto"
 	"github.com/hashicorp/memberlist"
+	"github.com/hashicorp/raft"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -21,6 +22,7 @@ import (
 type Replicator struct {
 	ID string
 	Ml *memberlist.Memberlist
+	Rf *RaftNode
 
 	mu    sync.Mutex
 	peers map[string]pb.KVClient
@@ -50,6 +52,10 @@ func NewReplicator(id string, ml *memberlist.Memberlist, rf int) *Replicator {
 	}
 }
 
+func (r *Replicator) SetRaft(rfNode *RaftNode) {
+	r.Rf = rfNode
+}
+
 func (r *Replicator) SetPlacement(p *Placement) {
 	r.plMu.Lock()
 	r.placement = p
@@ -71,6 +77,11 @@ func (r *Replicator) UpdatePlacement() {
 		return
 	}
 	defer r.updateMu.Unlock()
+
+	if r.Rf != nil && !r.Rf.IsLeader() {
+		log.Printf("[replicator] skipping placement update on follower node %s", r.ID)
+		return
+	}
 
 	if r.Ml == nil {
 		log.Printf("[replicator] cannot update placement: memberlist is nil")
@@ -133,8 +144,25 @@ func (r *Replicator) UpdatePlacement() {
 	pl.AssignVNodes(counts)
 	pl.AssignReplicas(activeMetrics, rttMatrix, r.ReplicationFactor)
 
+	if r.Rf != nil {
+		if err := r.Rf.ApplyPlacement(pl, 5*time.Second); err != nil {
+			log.Printf("[replicator] failed to commit placement via raft: %v", err)
+			return
+		}
+		log.Printf("[replicator] placement committed via raft (epoch=%d)", pl.Epoch)
+		return
+	}
+
 	r.SetPlacement(pl)
-	log.Printf("[replicator] placement updated (epoch=%d) with %d active nodes", pl.Epoch, len(scores))
+	log.Printf("[replicator] placement updated locally (epoch=%d) with %d active nodes", pl.Epoch, len(scores))
+}
+
+func (r *Replicator) ApplyPlacementFromRaft(p *Placement) {
+	if p == nil {
+		return
+	}
+	r.SetPlacement(p)
+	log.Printf("[replicator] applied committed placement from raft (epoch=%d)", p.Epoch)
 }
 
 func (r *Replicator) getPlacement() *Placement {
@@ -163,14 +191,47 @@ func parseMeta(meta []byte) (nodeID string, rpcAddr string, err error) {
 		return "", "", errors.New("empty member metadata")
 	}
 
+	if strings.Contains(raw, ",") {
+		parts := strings.Split(raw, ",")
+		if len(parts) < 2 {
+			return "", "", fmt.Errorf("invalid member metadata format: %q", raw)
+		}
+		if strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+			return "", "", fmt.Errorf("invalid member metadata fields: %q", raw)
+		}
+		return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), nil
+	}
+
 	parts := strings.SplitN(raw, ":", 2)
-	if len(parts) != 2 {
-		return "", "", fmt.Errorf("invalid member metadata format: %q", raw)
+	if len(parts) == 2 {
+		if strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+			return "", "", fmt.Errorf("invalid member metadata fields: %q", raw)
+		}
+		return parts[0], parts[1], nil
 	}
-	if strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
-		return "", "", fmt.Errorf("invalid member metadata fields: %q", raw)
+
+	return "", "", fmt.Errorf("invalid member metadata format: %q", raw)
+}
+
+func parseMetaWithRaft(meta []byte) (nodeID string, rpcAddr string, raftAddr string, err error) {
+	raw := strings.TrimSpace(string(meta))
+	if raw == "" {
+		return "", "", "", errors.New("empty member metadata")
 	}
-	return parts[0], parts[1], nil
+	parts := strings.Split(raw, ",")
+	if len(parts) < 2 {
+		id, rpc, e := parseMeta(meta)
+		return id, rpc, "", e
+	}
+	nodeID = strings.TrimSpace(parts[0])
+	rpcAddr = strings.TrimSpace(parts[1])
+	if len(parts) > 2 {
+		raftAddr = strings.TrimSpace(parts[2])
+	}
+	if nodeID == "" || rpcAddr == "" {
+		return "", "", "", fmt.Errorf("invalid member metadata fields: %q", raw)
+	}
+	return nodeID, rpcAddr, raftAddr, nil
 }
 
 func (r *Replicator) getOrCreateClient(member *memberlist.Node) (pb.KVClient, error) {
@@ -426,8 +487,70 @@ func retryReplication(pid string, c pb.KVClient, req *pb.ReplicationRequest, cct
 	return fmt.Errorf("retry replication to %s exhausted: %w", pid, lastErr)
 }
 func (r *Replicator) CheckOwnership(key string) (bool, string) {
-	owner, _ := r.placement.GetNodesForKey(key)
+	pl := r.getPlacement()
+	if pl == nil {
+		return true, r.ID
+	}
+	owner, _ := pl.GetNodesForKey(key)
 	return strings.EqualFold(owner, r.ID), owner
+}
+
+func (r *Replicator) IsLeader() bool {
+	if r.Rf == nil {
+		return true
+	}
+	return r.Rf.IsLeader()
+}
+
+func (r *Replicator) ReconcileRaftWithMembership(members []*memberlist.Node) error {
+	if r.Rf == nil || !r.Rf.IsLeader() {
+		return nil
+	}
+
+	cfg, err := r.Rf.Configuration(5 * time.Second)
+	if err != nil {
+		return err
+	}
+
+	existing := make(map[string]raft.Server)
+	for _, s := range cfg.Servers {
+		existing[string(s.ID)] = s
+	}
+
+	seen := make(map[string]struct{})
+	for _, m := range members {
+		nodeID, _, raftAddr, err := parseMetaWithRaft(m.Meta)
+		if err != nil {
+			continue
+		}
+		if raftAddr == "" {
+			continue
+		}
+		seen[nodeID] = struct{}{}
+		if _, ok := existing[nodeID]; ok {
+			continue
+		}
+		if err := r.Rf.AddVoter(nodeID, raftAddr, 5*time.Second); err != nil {
+			log.Printf("[raft-reconcile] add voter failed for %s (%s): %v", nodeID, raftAddr, err)
+		}
+	}
+
+	for id := range existing {
+		if id == r.ID {
+			continue
+		}
+		if _, ok := seen[id]; ok {
+			continue
+		}
+		if err := r.Rf.RemoveServer(id, 5*time.Second); err != nil {
+			log.Printf("[raft-reconcile] remove server failed for %s: %v", id, err)
+		}
+	}
+
+	// After reconciling membership, recompute and commit placement as leader.
+	r.UpdatePlacement()
+
+	return nil
 }
 
 func (r *Replicator) ForwardToOwner(ctx context.Context, owner string, req any) error {

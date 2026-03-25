@@ -13,6 +13,9 @@ import (
 func main() {
 	var rpc_port = flag.Int("rpc-port", 9999, "grpc server port")
 	var rpcHost = flag.String("rpc-host", "127.0.0.1", "grpc advertise host/ip used by peers")
+	var raftPort = flag.Int("raft-port", 0, "raft tcp port (default rpc-port+1000)")
+	var raftBindAddr = flag.String("raft-bind-addr", "0.0.0.0", "raft bind address")
+	var raftAdvertiseIP = flag.String("raft-advertise-ip", "127.0.0.1", "raft advertise IP used by peers")
 	var ack = flag.Int("ack", 1, "ack mode: 0=after enqueue, 1=after flush, 2=after fsync")
 	var gossipBindAddr = flag.String("gossip-bind-addr", "0.0.0.0", "memberlist bind address")
 	var gossipPort = flag.Int("gossip-port", 0, "memberlist gossip port (0 selects random port on non-seed node)")
@@ -67,6 +70,11 @@ func main() {
 
 	server := core.NewServer(reqCh)
 	nodeID := fmt.Sprintf("node-%d", *rpc_port)
+	resolvedRaftPort := *raftPort
+	if resolvedRaftPort == 0 {
+		resolvedRaftPort = *rpc_port + 1000
+	}
+	raftAddr := fmt.Sprintf("%s:%d", *raftAdvertiseIP, resolvedRaftPort)
 	resolvedGossipPort := *gossipPort
 	if resolvedGossipPort == 0 && *rpc_port == 9999 {
 		resolvedGossipPort = 7946
@@ -76,12 +84,13 @@ func main() {
 	// 	panic(err)
 	// }
 	Node := &cluster.Node{
-		ID:                nodeID,
-		RPCAddr:           fmt.Sprintf("%s:%d", *rpcHost, *rpc_port),
-		Ml:                nil,
-		EventLoop:         eventLoop,
-		Server:            server,
-	
+		ID:        nodeID,
+		RPCAddr:   fmt.Sprintf("%s:%d", *rpcHost, *rpc_port),
+		RaftAddr:  raftAddr,
+		Ml:        nil,
+		EventLoop: eventLoop,
+		Server:    server,
+
 		GossipBindAddr:    *gossipBindAddr,
 		GossipBindPort:    resolvedGossipPort,
 		GossipAdvertiseIP: *gossipAdvertiseIP,
@@ -90,12 +99,21 @@ func main() {
 		panic(err)
 	}
 	replicator := cluster.NewReplicator(nodeID, Node.Ml, *replicationFactor)
-
-	// Set up membership callback before any join so join events are handled.
-	Node.OnMembershipChanged = func() {
-		fmt.Println("[main] membership changed, updating placement...")
-		replicator.UpdatePlacement()
+	raftDataDir := filepath.Join(baseDir, resolvedWalDir, "raft")
+	rn, err := cluster.NewRaftNode(
+		nodeID,
+		fmt.Sprintf("%s:%d", *raftBindAddr, resolvedRaftPort),
+		raftDataDir,
+		*rpc_port == 9999,
+		replicator.ApplyPlacementFromRaft,
+	)
+	if err != nil {
+		panic(err)
 	}
+	replicator.SetRaft(rn)
+	Node.Reconciler = replicator
+	Node.StartMembershipWorkers()
+	defer Node.StopMembershipWorkers()
 
 	if *rpc_port != 9999 {
 		if err := Node.JoinCluster(*seedGossipAddr); err != nil {
