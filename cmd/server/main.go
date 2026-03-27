@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-
+"log"
 	"github.com/AymenBenyoub/nawst/cluster"
 	"github.com/AymenBenyoub/nawst/core"
 )
@@ -35,7 +35,8 @@ func main() {
 
 	baseDir, err := os.UserConfigDir()
 	if err != nil {
-		panic(err)
+		log.Printf("Could not get user config dir, falling back to current directory.")
+		baseDir = "."
 	}
 
 	if err := os.MkdirAll(filepath.Join(baseDir, resolvedWalDir), 0755); err != nil {

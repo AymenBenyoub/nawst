@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/hashicorp/raft"
+	raftboltdb "github.com/hashicorp/raft-boltdb/v2"
 )
 
 type placementApplyFn func(*Placement)
@@ -52,20 +53,21 @@ func (f *placementFSM) Apply(l *raft.Log) any {
 			return fmt.Errorf("decode install_placement payload: %w", err)
 		}
 
+		var next Placement
 		f.mu.Lock()
 		if f.placement != nil && payload.Placement.Epoch <= f.placement.Epoch {
 			f.mu.Unlock()
 			return nil
 		}
-		next := payload.Placement
+		next = payload.Placement
 		f.placement = &next
-		f.mu.Unlock()
+		f.mu.Unlock() // nlock before callback
 
 		if f.onApply != nil {
-			applied := next
-			f.onApply(&applied)
+			f.onApply(&next)
 		}
 		return nil
+
 	default:
 		return fmt.Errorf("unknown raft command type: %s", cmd.Type)
 	}
@@ -126,10 +128,11 @@ func (s *fsmSnapshot) Persist(sink raft.SnapshotSink) error {
 func (s *fsmSnapshot) Release() {}
 
 type RaftNode struct {
-	mu     sync.RWMutex
-	nodeID string
-	raft   *raft.Raft
-	fsm    *placementFSM
+	mu        sync.RWMutex
+	nodeID    string
+	raft      *raft.Raft
+	fsm       *placementFSM
+	boltStore *raftboltdb.BoltStore
 }
 
 func NewRaftNode(nodeID string, raftBindAddr string, raftDataDir string, bootstrap bool, onApply placementApplyFn) (*RaftNode, error) {
@@ -147,8 +150,15 @@ func NewRaftNode(nodeID string, raftBindAddr string, raftDataDir string, bootstr
 	cfg.LocalID = raft.ServerID(nodeID)
 
 	fsm := newPlacementFSM(onApply)
-	logStore := raft.NewInmemStore()
-	stableStore := raft.NewInmemStore()
+	boltDB, err := raftboltdb.NewBoltStore(filepath.Join(raftDataDir, "raft.db"))
+	if err != nil {
+		return nil, fmt.Errorf("could not create bolt store: %s", err)
+	}
+	logStore, err := raft.NewLogCache(512, boltDB)
+	if err != nil {
+		return nil, fmt.Errorf("could not create log cache: %s", err)
+	}
+	stableStore := boltDB
 	snapshotStore, err := raft.NewFileSnapshotStore(filepath.Join(raftDataDir, "snapshots"), 2, os.Stderr)
 	if err != nil {
 		return nil, err
@@ -168,7 +178,7 @@ func NewRaftNode(nodeID string, raftBindAddr string, raftDataDir string, bootstr
 		return nil, err
 	}
 
-	rn := &RaftNode{nodeID: nodeID, raft: r, fsm: fsm}
+	rn := &RaftNode{nodeID: nodeID, raft: r, fsm: fsm, boltStore: boltDB}
 
 	if bootstrap {
 		c := raft.Configuration{Servers: []raft.Server{{
@@ -269,4 +279,24 @@ func (rn *RaftNode) Configuration(timeout time.Duration) (raft.Configuration, er
 		return raft.Configuration{}, err
 	}
 	return fut.Configuration(), nil
+}
+
+func (rn *RaftNode) CloseBoltDB() error {
+	rn.mu.RLock()
+	defer rn.mu.RUnlock()
+	if rn.raft == nil {
+		return fmt.Errorf("raft is not initialized")
+	}
+	shutdownFuture := rn.raft.Shutdown()
+	if err := shutdownFuture.Error(); err != nil {
+		return fmt.Errorf("error shutting down raft: %w", err)
+	}
+
+	// 2. Close the BoltDB file (releases the file lock)
+	if err := rn.boltStore.Close(); err != nil {
+		return fmt.Errorf("error closing bolt store: %w", err)
+	}
+
+	log.Printf("[raft] node %s closed successfully", rn.nodeID)
+	return nil
 }
