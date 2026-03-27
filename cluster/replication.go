@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"maps"
+	"slices"
 
 	"strings"
 	"sync"
@@ -486,14 +487,15 @@ func retryReplication(pid string, c pb.KVClient, req *pb.ReplicationRequest, cct
 
 	return fmt.Errorf("retry replication to %s exhausted: %w", pid, lastErr)
 }
-func (r *Replicator) CheckOwnership(key string) (bool, string) {
+func (r *Replicator) CheckOwnership(key string) (bool, bool, string) {
 	pl := r.getPlacement()
 	if pl == nil {
-		return true, r.ID
+		return true, false, ""
 	}
-	owner, _ := pl.GetNodesForKey(key)
-	return strings.EqualFold(owner, r.ID), owner
+	owner, replicas := pl.GetNodesForKey(key)
+	return strings.EqualFold(owner, r.ID),slices.Contains(replicas,r.ID), owner
 }
+
 
 func (r *Replicator) IsLeader() bool {
 	if r.Rf == nil {

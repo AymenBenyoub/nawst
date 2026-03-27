@@ -24,7 +24,7 @@ import (
 
 type Replicator interface {
 	ReplicateToAll(ctx context.Context, op pb.Op, key string, value []byte) error
-	CheckOwnership(key string) (bool, string)
+	CheckOwnership(key string) (bool, bool, string)
 	ForwardToOwner(ctx context.Context, owner string, req any) ([]byte, error)
 }
 
@@ -94,8 +94,8 @@ func (s *Server) sendRequest(ctx context.Context, req Request) Response {
 
 // gRPC Put RPC
 func (s *Server) Put(ctx context.Context, req *pb.PutRequest) (*emptypb.Empty, error) {
-	ok, owner := s.Replicator.CheckOwnership(req.Key)
-	if !ok {
+	is_powner, _, owner := s.Replicator.CheckOwnership(req.Key)
+	if !is_powner {
 		_, err := s.Replicator.ForwardToOwner(ctx, owner, req)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "Failed to forward PUT to owner %s: %v", owner, err)
@@ -126,36 +126,44 @@ func (s *Server) Put(ctx context.Context, req *pb.PutRequest) (*emptypb.Empty, e
 }
 
 // gRPC Get RPC
-// TODO: serve GETs only if we are the owner, OR allow replica reads with some version/timestamp check (right now it returns the value if it finds it locally, whether it's supposed to own it, replicate it or not)
+
 func (s *Server) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, error) {
-
-	resp := s.sendRequest(ctx, Request{
-		Op:           OpGet,
-		Key:          req.Key,
-		ResponseChan: make(chan Response, 1),
-	})
-	if resp.Err != nil {
-		if errors.Is(resp.Err, ErrKeyNotFound) {
-			_, owner := s.Replicator.CheckOwnership(req.Key)
-			if owner != "" {
-				val, err := s.Replicator.ForwardToOwner(ctx, owner, req)
-				if err != nil {
-					return nil, status.Errorf(codes.Internal, "Failed to forward GET to owner %s: %v", owner, err)
-				}
-				log.Printf("Forwarded GET request for key %q to owner %s", req.Key, owner)
-				return &pb.GetResponse{Value: val}, nil
-
-			}
-		}
-		return nil, status.Errorf(codes.Internal, "Failed to GET key: %v", resp.Err)
-	}
-	return &pb.GetResponse{Value: resp.Value}, nil
+    is_powner, is_replica, owner := s.Replicator.CheckOwnership(req.Key)
+    if is_powner || is_replica {
+        resp := s.sendRequest(ctx, Request{
+            Op:           OpGet,
+            Key:          req.Key,
+            ResponseChan: make(chan Response, 1),
+        })
+        if resp.Err != nil {
+            if errors.Is(resp.Err, ErrKeyNotFound) {
+                if owner != "" {
+					// we're a replica but don't have the key locally.
+                    val, err := s.Replicator.ForwardToOwner(ctx, owner, req)
+                    if err != nil {
+                        return nil, status.Errorf(codes.Internal, "Failed to forward GET to owner %s: %v", owner, err)
+                    }
+                    log.Printf("Forwarded GET request for key %q to owner %s", req.Key, owner)
+                    return &pb.GetResponse{Value: val}, nil
+                }
+            }
+            return nil, status.Errorf(codes.Internal, "Failed to GET key: %v", resp.Err)
+        }
+        return &pb.GetResponse{Value: resp.Value}, nil
+    }
+    // not responsible for this key - forward to owner
+    val, err := s.Replicator.ForwardToOwner(ctx, owner, req)
+    if err != nil {
+        return nil, status.Errorf(codes.Internal, "Failed to forward GET to owner %s: %v", owner, err)
+    }
+    log.Printf("Forwarded GET request for key %q to owner %s", req.Key, owner)
+    return &pb.GetResponse{Value: val}, nil
 }
 
 // gRPC Delete RPC
 func (s *Server) Delete(ctx context.Context, req *pb.DeleteRequest) (*emptypb.Empty, error) {
-	ok, owner := s.Replicator.CheckOwnership(req.Key)
-	if !ok {
+	is_powner, _, owner := s.Replicator.CheckOwnership(req.Key)
+	if !is_powner {
 		_, err := s.Replicator.ForwardToOwner(ctx, owner, req)
 
 		if err != nil {
