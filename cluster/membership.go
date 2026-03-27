@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"sync"
@@ -30,6 +31,8 @@ type Node struct {
 	reconcileCh      chan struct{}
 	stopCh           chan struct{}
 	wg               sync.WaitGroup
+	broadcasts       *memberlist.TransmitLimitedQueue
+	metricsHandler   func(*GossipMetricsMessage)
 }
 
 type Reconciler interface {
@@ -65,6 +68,25 @@ func (n *Node) StartControlChannels() {
 		n.stopCh = make(chan struct{})
 	}
 }
+
+type messageBroadcast struct {
+	msg []byte
+}
+
+func (b *messageBroadcast) Invalidates(other memberlist.Broadcast) bool {
+	ob, ok := other.(*messageBroadcast)
+	if !ok {
+		return false
+	}
+	return bytes.Equal(b.msg, ob.msg)
+}
+
+func (b *messageBroadcast) Message() []byte {
+	return b.msg
+}
+
+func (b *messageBroadcast) Finished() {}
+
 func (n *Node) EnqueueMembershipEvent(event MembershipEvent) {
 	select {
 	case n.MembershipEvents <- event:
@@ -72,6 +94,22 @@ func (n *Node) EnqueueMembershipEvent(event MembershipEvent) {
 		log.Printf("membership event channel is full, dropping event: %d - node: %s", event.Type, event.NodeID)
 	}
 }
+
+func (n *Node) SetMetricsHandler(handler func(*GossipMetricsMessage)) {
+	n.metricsHandler = handler
+}
+
+func (n *Node) QueueBroadcastMessage(msg []byte) error {
+	if len(msg) == 0 {
+		return fmt.Errorf("empty broadcast message")
+	}
+	if n.broadcasts == nil {
+		return fmt.Errorf("broadcast queue is not initialized")
+	}
+	n.broadcasts.QueueBroadcast(&messageBroadcast{msg: append([]byte(nil), msg...)})
+	return nil
+}
+
 func (n *Node) signalReconcile() {
 	select {
 	case n.reconcileCh <- struct{}{}:
@@ -167,10 +205,19 @@ func (n *Node) NodeMeta(limit int) []byte {
 	return fmt.Appendf(nil, "%s,%s,%s", n.ID, n.RPCAddr, n.RaftAddr)
 }
 func (n *Node) NotifyMsg(b []byte) {
-
+	msg, err := DecodeGossipMetricsMessage(b)
+	if err != nil {
+		return
+	}
+	if n.metricsHandler != nil {
+		n.metricsHandler(msg)
+	}
 }
 func (n *Node) GetBroadcasts(overhead, limit int) [][]byte {
-	return nil
+	if n.broadcasts == nil {
+		return nil
+	}
+	return n.broadcasts.GetBroadcasts(overhead, limit)
 }
 func (n *Node) LocalState(join bool) []byte {
 	return nil
@@ -208,6 +255,15 @@ func (n *Node) CreateCluster() error {
 		return err
 	}
 	n.Ml = ml
+	n.broadcasts = &memberlist.TransmitLimitedQueue{
+		NumNodes: func() int {
+			if n.Ml == nil {
+				return 1
+			}
+			return n.Ml.NumMembers()
+		},
+		RetransmitMult: 3,
+	}
 	return nil
 
 }

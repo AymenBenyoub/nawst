@@ -107,80 +107,80 @@ func runPutOnlyClient(wg *sync.WaitGroup, client proto.KVClient, cfg LoadConfig,
 	}
 }
 func runStreamClientMixed(wg *sync.WaitGroup, client proto.KVClient, cfg LoadConfig, id int, metrics *Metrics) {
-    defer wg.Done()
+	defer wg.Done()
 
-    ctx := context.Background()
-    stream, err := client.StreamKV(ctx)
-    if err != nil {
-        log.Printf("[Client %d] Stream init failed: %v", id, err)
-        return
-    }
+	ctx := context.Background()
+	stream, err := client.StreamKV(ctx)
+	if err != nil {
+		log.Printf("[Client %d] Stream init failed: %v", id, err)
+		return
+	}
 
-    var inFlight int64
-    doneSending := make(chan struct{})
+	var inFlight int64
+	doneSending := make(chan struct{})
 
-    // 1. Response tallying goroutine
-    go func() {
-        for {
-            resp, err := stream.Recv()
-            if err == io.EOF {
-                break
-            }
-            if err != nil {
-                log.Printf("[Client %d] Stream recv error: %v", id, err)
-                break
-            }
+	// 1. Response tallying goroutine
+	go func() {
+		for {
+			resp, err := stream.Recv()
+			if err == io.EOF {
+				break
+			}
+			if err != nil {
+				log.Printf("[Client %d] Stream recv error: %v", id, err)
+				break
+			}
 
-            switch resp.Op {
-            case proto.Op_PUT:
-                atomic.AddInt64(&metrics.PutsOK, 1)
-            case proto.Op_GET:
-                atomic.AddInt64(&metrics.GetsOK, 1)
-            case proto.Op_DELETE:
-                atomic.AddInt64(&metrics.DeleteOK, 1)
-            }
+			switch resp.Op {
+			case proto.Op_PUT:
+				atomic.AddInt64(&metrics.PutsOK, 1)
+			case proto.Op_GET:
+				atomic.AddInt64(&metrics.GetsOK, 1)
+			case proto.Op_DELETE:
+				atomic.AddInt64(&metrics.DeleteOK, 1)
+			}
 
-            atomic.AddInt64(&inFlight, -1)
-        }
-    }()
+			atomic.AddInt64(&inFlight, -1)
+		}
+	}()
 
-    // Cleaned up send function without the useless context timeout
-    sendReq := func(req *proto.StreamReq) bool {
-        if err := stream.Send(req); err != nil {
-            atomic.AddInt64(&metrics.Failures, 1)
-            return false
-        }
-        atomic.AddInt64(&inFlight, 1)
-        return true
-    }
+	// Cleaned up send function without the useless context timeout
+	sendReq := func(req *proto.StreamReq) bool {
+		if err := stream.Send(req); err != nil {
+			atomic.AddInt64(&metrics.Failures, 1)
+			return false
+		}
+		atomic.AddInt64(&inFlight, 1)
+		return true
+	}
 
-    value := randomBytes(cfg.ValueSize)
+	value := randomBytes(cfg.ValueSize)
 
-    // 2. Send PUTs
-    for i := 0; i < cfg.Requests; i++ {
-        key := fmt.Sprintf("c%d:k%d", id, i)
-        sendReq(&proto.StreamReq{Op: proto.Op_PUT, Key: key, Value: value})
-    }
+	// 2. Send PUTs
+	for i := 0; i < cfg.Requests; i++ {
+		key := fmt.Sprintf("c%d:k%d", id, i)
+		sendReq(&proto.StreamReq{Op: proto.Op_PUT, Key: key, Value: value})
+	}
 
-    // 3. Send GETs
-    for i := 0; i < cfg.Requests; i++ {
-        key := fmt.Sprintf("c%d:k%d", id, i)
-        sendReq(&proto.StreamReq{Op: proto.Op_GET, Key: key})
-    }
+	// 3. Send GETs
+	for i := 0; i < cfg.Requests; i++ {
+		key := fmt.Sprintf("c%d:k%d", id, i)
+		sendReq(&proto.StreamReq{Op: proto.Op_GET, Key: key})
+	}
 
-    // 4. Send DELETEs
-    for i := 0; i < cfg.Requests; i++ {
-        key := fmt.Sprintf("c%d:k%d", id, i)
-        sendReq(&proto.StreamReq{Op: proto.Op_DELETE, Key: key})
-    }
+	// 4. Send DELETEs
+	for i := 0; i < cfg.Requests; i++ {
+		key := fmt.Sprintf("c%d:k%d", id, i)
+		sendReq(&proto.StreamReq{Op: proto.Op_DELETE, Key: key})
+	}
 
-    close(doneSending)
-    stream.CloseSend() // tell server we are done sending
+	close(doneSending)
+	stream.CloseSend() // tell server we are done sending
 
-    // 5. Wait for all ACKs
-    for atomic.LoadInt64(&inFlight) > 0 {
-        time.Sleep(1 * time.Millisecond)
-    }
+	// 5. Wait for all ACKs
+	for atomic.LoadInt64(&inFlight) > 0 {
+		time.Sleep(1 * time.Millisecond)
+	}
 }
 func main() {
 	cfg := LoadConfig{}

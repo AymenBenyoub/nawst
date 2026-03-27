@@ -94,7 +94,6 @@ func TestWal_OrderPreserved(t *testing.T) {
 	}
 }
 
-
 func TestWal_CrashBeforeFlush(t *testing.T) {
 	path := "test_crash.wal"
 	defer os.Remove(path)

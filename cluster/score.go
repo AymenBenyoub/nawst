@@ -37,8 +37,11 @@ type NodeMetrics struct {
 }
 
 const (
-	WeightRTT = 0.65
-	WeightBW  = 0.35 //only these two for now
+	WeightRTT  = 0.30
+	WeightCPU  = 0.20
+	WeightMEM  = 0.20
+	WeightNET  = 0.20
+	WeightDisk = 0.10
 )
 
 func CalculateScores(metrics []NodeMetrics) []NodeInfo {
@@ -46,8 +49,13 @@ func CalculateScores(metrics []NodeMetrics) []NodeInfo {
 		return nil
 	}
 
+	const eps = 1e-9
+
 	var totalRTT float64
-	var totalBW float64
+	var totalCPUCap float64
+	var totalMemCap float64
+	var totalNetCap float64
+	var totalDiskCap float64
 	for _, m := range metrics {
 		rtt := m.AvgRTT
 		if rtt <= 0 || math.IsNaN(rtt) || math.IsInf(rtt, 0) {
@@ -55,57 +63,100 @@ func CalculateScores(metrics []NodeMetrics) []NodeInfo {
 		}
 		totalRTT += rtt
 
-		bw := float64(m.BandwidthMbps)
-		if bw <= 0 || math.IsNaN(bw) || math.IsInf(bw, 0) {
-			bw = 1.0
-		}
-		totalBW += bw
-	}
-	ClusterAvgRTT := totalRTT / float64(len(metrics))
-	if ClusterAvgRTT <= 0 || math.IsNaN(ClusterAvgRTT) || math.IsInf(ClusterAvgRTT, 0) {
-		ClusterAvgRTT = 1.0
+		cpuCap := float64(maxInt(m.CPUCores, 1))
+		memCap := float64(maxInt(m.MemGB, 1))
+		netCap := float64(maxInt(m.BandwidthMbps, 1))
+		diskCap := float64(maxInt(m.DiskGB, 1))
+
+		totalCPUCap += cpuCap
+		totalMemCap += memCap
+		totalNetCap += netCap
+		totalDiskCap += diskCap
 	}
 
-	avgBW := totalBW / float64(len(metrics))
-	if avgBW <= 0 || math.IsNaN(avgBW) || math.IsInf(avgBW, 0) {
-		avgBW = 1.0
+	clusterAvgRTT := totalRTT / float64(len(metrics))
+	if clusterAvgRTT <= 0 || math.IsNaN(clusterAvgRTT) || math.IsInf(clusterAvgRTT, 0) {
+		clusterAvgRTT = 1.0
 	}
 
-	BandwidthRC := make(map[string]float64) // relative capacity for bandwidth, higher is better
-	for _, m := range metrics {
-		bw := float64(m.BandwidthMbps)
-		if bw <= 0 || math.IsNaN(bw) || math.IsInf(bw, 0) {
-			bw = 1.0
-		}
-		BandwidthRC[m.NodeID] = bw / avgBW
+	avgCPUCap := totalCPUCap / float64(len(metrics))
+	avgMemCap := totalMemCap / float64(len(metrics))
+	avgNetCap := totalNetCap / float64(len(metrics))
+	avgDiskCap := totalDiskCap / float64(len(metrics))
+
+	if avgCPUCap <= 0 || math.IsNaN(avgCPUCap) || math.IsInf(avgCPUCap, 0) {
+		avgCPUCap = 1.0
 	}
+	if avgMemCap <= 0 || math.IsNaN(avgMemCap) || math.IsInf(avgMemCap, 0) {
+		avgMemCap = 1.0
+	}
+	if avgNetCap <= 0 || math.IsNaN(avgNetCap) || math.IsInf(avgNetCap, 0) {
+		avgNetCap = 1.0
+	}
+	if avgDiskCap <= 0 || math.IsNaN(avgDiskCap) || math.IsInf(avgDiskCap, 0) {
+		avgDiskCap = 1.0
+	}
+
 	scores := make([]NodeInfo, len(metrics))
 	for i, m := range metrics {
 		scores[i].ID = m.NodeID
 
 		rtt := m.AvgRTT
 		if rtt <= 0 || math.IsNaN(rtt) || math.IsInf(rtt, 0) {
-			rtt = ClusterAvgRTT
+			rtt = clusterAvgRTT
 		}
 
-		netUsage := m.NetUsage
-		if math.IsNaN(netUsage) || math.IsInf(netUsage, 0) {
-			netUsage = 0.5
+		cpuUsage := clampMetric(m.CPUUsage)
+		memUsage := clampMetric(m.MemUsage)
+		netUsage := clampMetric(m.NetUsage)
+		diskUsage := clampMetric(m.DiskUsage)
+
+		rsCPU := (float64(maxInt(m.CPUCores, 1)) / avgCPUCap)
+		rsMEM := (float64(maxInt(m.MemGB, 1)) / avgMemCap)
+		rsNET := (float64(maxInt(m.BandwidthMbps, 1)) / avgNetCap)
+		rsDisk := (float64(maxInt(m.DiskGB, 1)) / avgDiskCap)
+
+		if rsCPU <= 0 || math.IsNaN(rsCPU) || math.IsInf(rsCPU, 0) {
+			rsCPU = 1.0
 		}
-		if netUsage < 0 {
-			netUsage = 0
+		if rsMEM <= 0 || math.IsNaN(rsMEM) || math.IsInf(rsMEM, 0) {
+			rsMEM = 1.0
 		}
-		if netUsage > 0.99 {
-			netUsage = 0.99
+		if rsNET <= 0 || math.IsNaN(rsNET) || math.IsInf(rsNET, 0) {
+			rsNET = 1.0
+		}
+		if rsDisk <= 0 || math.IsNaN(rsDisk) || math.IsInf(rsDisk, 0) {
+			rsDisk = 1.0
 		}
 
-		netPenalty := 1.0 / (1.01 - netUsage)
-		rc := BandwidthRC[m.NodeID]
-		if rc <= 0 || math.IsNaN(rc) || math.IsInf(rc, 0) {
-			rc = 1.0
-		}
+		diskPenalty := 1.0 / (1.01 - math.Min(diskUsage, 0.99))
 
-		scores[i].Score = WeightRTT*(rtt/ClusterAvgRTT) + WeightBW*(netPenalty/rc)
+		scores[i].Score =
+			WeightRTT*(rtt/(clusterAvgRTT+eps)) +
+				WeightCPU*(cpuUsage/rsCPU) +
+				WeightMEM*(memUsage/rsMEM) +
+				WeightNET*(netUsage/rsNET) +
+				WeightDisk*(diskPenalty/rsDisk)
 	}
 	return scores
+}
+
+func maxInt(v, fallback int) int {
+	if v > 0 {
+		return v
+	}
+	return fallback
+}
+
+func clampMetric(v float64) float64 {
+	if math.IsNaN(v) || math.IsInf(v, 0) {
+		return 0
+	}
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
 }

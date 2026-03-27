@@ -35,8 +35,12 @@ type Replicator struct {
 	metricsMu sync.RWMutex
 	metrics   []NodeMetrics
 	rttMatrix map[string]map[string]float64
+	collector *MetricsCollector
+	gossipFn  func([]byte) error
 
 	updateMu sync.Mutex
+	stopMu   sync.Mutex
+	stopCh   chan struct{}
 
 	ReplicationFactor int
 }
@@ -50,6 +54,7 @@ func NewReplicator(id string, ml *memberlist.Memberlist, rf int) *Replicator {
 		metrics:           []NodeMetrics{},
 		rttMatrix:         make(map[string]map[string]float64),
 		ReplicationFactor: rf,
+		stopCh:            make(chan struct{}),
 	}
 }
 
@@ -70,6 +75,132 @@ func (r *Replicator) SetMetrics(metrics []NodeMetrics, rttMatrix map[string]map[
 	r.rttMatrix = make(map[string]map[string]float64)
 	maps.Copy(r.rttMatrix, rttMatrix)
 	log.Printf("[replicator] stored metrics for %d nodes", len(metrics))
+}
+
+func (r *Replicator) SetMetricsCollector(c *MetricsCollector) {
+	r.metricsMu.Lock()
+	defer r.metricsMu.Unlock()
+	r.collector = c
+}
+
+func (r *Replicator) SetGossipBroadcaster(fn func([]byte) error) {
+	r.metricsMu.Lock()
+	defer r.metricsMu.Unlock()
+	r.gossipFn = fn
+}
+
+func (r *Replicator) HandleMetricsMessage(msg *GossipMetricsMessage) {
+	if msg == nil || msg.Metrics.NodeID == "" {
+		return
+	}
+
+	r.metricsMu.Lock()
+	defer r.metricsMu.Unlock()
+
+	found := false
+	for i := range r.metrics {
+		if r.metrics[i].NodeID == msg.Metrics.NodeID {
+			r.metrics[i] = msg.Metrics
+			found = true
+			break
+		}
+	}
+	if !found {
+		r.metrics = append(r.metrics, msg.Metrics)
+	}
+
+	if _, ok := r.rttMatrix[msg.Metrics.NodeID]; !ok {
+		r.rttMatrix[msg.Metrics.NodeID] = make(map[string]float64)
+	}
+	for peerID, peerRTT := range msg.RTTData {
+		r.rttMatrix[msg.Metrics.NodeID][peerID] = peerRTT
+	}
+
+	if r.Rf == nil || r.Rf.IsLeader() {
+		go r.UpdatePlacement()
+	}
+}
+
+func (r *Replicator) StartMetricsReporter(interval time.Duration) {
+	if interval <= 0 {
+		interval = 2 * time.Second
+	}
+
+	ticker := time.NewTicker(interval)
+	go func() {
+		defer ticker.Stop()
+		for {
+			select {
+			case <-r.stopCh:
+				return
+			case <-ticker.C:
+				r.publishLocalMetrics()
+			}
+		}
+	}()
+}
+
+func (r *Replicator) publishLocalMetrics() {
+	r.metricsMu.RLock()
+	collector := r.collector
+	gossipFn := r.gossipFn
+	r.metricsMu.RUnlock()
+
+	if collector == nil {
+		return
+	}
+
+	if r.Ml != nil {
+		for _, member := range r.Ml.Members() {
+			peerID, rpcAddr, err := parseMeta(member.Meta)
+			if err != nil {
+				continue
+			}
+			if peerID == r.ID {
+				continue
+			}
+			collector.ProbePeerRTT(peerID, rpcAddr, 300*time.Millisecond)
+		}
+	}
+
+	m := collector.GetCurrentMetrics()
+	rtt := collector.SnapshotRTT()
+
+	msg := &GossipMetricsMessage{
+		Type:    "metrics",
+		NodeID:  m.NodeID,
+		Metrics: m,
+		RTTData: rtt,
+		Time:    time.Now().UnixMilli(),
+	}
+	r.HandleMetricsMessage(msg)
+
+	b, err := EncodeGossipMetricsMessage(m, rtt)
+	if err != nil {
+		log.Printf("[metrics] encode failed: %v", err)
+		return
+	}
+	if gossipFn != nil {
+		if err := gossipFn(b); err != nil {
+			log.Printf("[metrics] gossip queue failed: %v", err)
+		}
+	}
+
+	LogResourceUsage(r.ID, m)
+	if r.Rf == nil || r.Rf.IsLeader() {
+		go r.UpdatePlacement()
+	}
+}
+
+func (r *Replicator) StopMetricsReporter() {
+	r.stopMu.Lock()
+	defer r.stopMu.Unlock()
+	select {
+	case <-r.stopCh:
+		return
+	default:
+		close(r.stopCh)
+	}
 }
 
 func (r *Replicator) UpdatePlacement() {
@@ -493,9 +624,8 @@ func (r *Replicator) CheckOwnership(key string) (bool, bool, string) {
 		return true, false, ""
 	}
 	owner, replicas := pl.GetNodesForKey(key)
-	return strings.EqualFold(owner, r.ID),slices.Contains(replicas,r.ID), owner
+	return strings.EqualFold(owner, r.ID), slices.Contains(replicas, r.ID), owner
 }
-
 
 func (r *Replicator) IsLeader() bool {
 	if r.Rf == nil {
@@ -586,6 +716,8 @@ func (r *Replicator) ForwardToOwner(ctx context.Context, owner string, req any) 
 	return val, nil
 }
 func (r *Replicator) Close() error {
+	r.StopMetricsReporter()
+
 	r.mu.Lock()
 	defer r.mu.Unlock()
 

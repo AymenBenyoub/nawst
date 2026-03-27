@@ -3,9 +3,11 @@ package main
 import (
 	"flag"
 	"fmt"
+	"log"
 	"os"
 	"path/filepath"
-"log"
+	"time"
+
 	"github.com/AymenBenyoub/nawst/cluster"
 	"github.com/AymenBenyoub/nawst/core"
 )
@@ -21,6 +23,9 @@ func main() {
 	var gossipPort = flag.Int("gossip-port", 0, "memberlist gossip port (0 selects random port on non-seed node)")
 	var gossipAdvertiseIP = flag.String("gossip-advertise-ip", "127.0.0.1", "memberlist advertise IP used by peers")
 	var seedGossipAddr = flag.String("seed-gossip-addr", "127.0.0.1:7946", "seed node memberlist address")
+	var bandwidthMbps = flag.Int("bandwidth-mbps", 1000, "estimated node NIC bandwidth in Mbps (static capacity denominator)")
+	var diskPath = flag.String("disk-path", "/", "filesystem path used for disk capacity/usage metrics")
+	var metricsInterval = flag.Duration("metrics-interval", 2*time.Second, "interval for collecting and gossiping node metrics")
 
 	var walDir = flag.String("wal-dir", "", "directory for WAL files (default: kvst/node-<rpc-port>)")
 	var replicationFactor = flag.Int("rf", 3, "replication factor for the cluster")
@@ -112,6 +117,18 @@ func main() {
 		panic(err)
 	}
 	replicator.SetRaft(rn)
+
+	collector := cluster.NewMetricsCollector(
+		nodeID,
+		*bandwidthMbps,
+		cluster.DetectDiskPath(*diskPath),
+	)
+	replicator.SetMetricsCollector(collector)
+	replicator.SetGossipBroadcaster(Node.QueueBroadcastMessage)
+	Node.SetMetricsHandler(replicator.HandleMetricsMessage)
+	replicator.StartMetricsReporter(*metricsInterval)
+	defer replicator.StopMetricsReporter()
+
 	Node.Reconciler = replicator
 	Node.StartMembershipWorkers()
 	defer Node.StopMembershipWorkers()
@@ -122,24 +139,7 @@ func main() {
 		}
 	}
 
-	// Demo metrics and RTT matrix - will be used for placement updates
-	demoMetrics := []cluster.NodeMetrics{
-		{NodeID: "node-9999", AvgRTT: 1.1, BandwidthMbps: 950, NetUsage: 0.3},
-		{NodeID: "node-10000", AvgRTT: 1.5, BandwidthMbps: 900, NetUsage: 0.30},
-		{NodeID: "node-10001", AvgRTT: 2.0, BandwidthMbps: 800, NetUsage: 0.4},
-		{NodeID: "node-10002", AvgRTT: 28.6, BandwidthMbps: 210, NetUsage: 0.85},
-	}
-	demoRTT := map[string]map[string]float64{
-		"node-9999":  {"node-10000": 15, "node-10001": 11, "node-10002": 10},
-		"node-10000": {"node-9999": 12, "node-10001": 15, "node-10002": 62},
-		"node-10001": {"node-9999": 10, "node-10000": 16, "node-10002": 18},
-		"node-10002": {"node-9999": 50, "node-10000": 20, "node-10001": 16},
-	}
-
-	// Store metrics in replicator for dynamic placement updates
-	replicator.SetMetrics(demoMetrics, demoRTT)
-
-	// Trigger initial placement update
+	// Trigger initial placement update; leader may skip until first metrics round is available.
 	fmt.Println("[main] triggering initial placement update...")
 	replicator.UpdatePlacement()
 

@@ -128,36 +128,36 @@ func (s *Server) Put(ctx context.Context, req *pb.PutRequest) (*emptypb.Empty, e
 // gRPC Get RPC
 
 func (s *Server) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, error) {
-    is_powner, is_replica, owner := s.Replicator.CheckOwnership(req.Key)
-    if is_powner || is_replica {
-        resp := s.sendRequest(ctx, Request{
-            Op:           OpGet,
-            Key:          req.Key,
-            ResponseChan: make(chan Response, 1),
-        })
-        if resp.Err != nil {
-            if errors.Is(resp.Err, ErrKeyNotFound) {
-                if owner != "" {
+	is_powner, is_replica, owner := s.Replicator.CheckOwnership(req.Key)
+	if is_powner || is_replica {
+		resp := s.sendRequest(ctx, Request{
+			Op:           OpGet,
+			Key:          req.Key,
+			ResponseChan: make(chan Response, 1),
+		})
+		if resp.Err != nil {
+			if errors.Is(resp.Err, ErrKeyNotFound) {
+				if owner != "" {
 					// we're a replica but don't have the key locally.
-                    val, err := s.Replicator.ForwardToOwner(ctx, owner, req)
-                    if err != nil {
-                        return nil, status.Errorf(codes.Internal, "Failed to forward GET to owner %s: %v", owner, err)
-                    }
-                    log.Printf("Forwarded GET request for key %q to owner %s", req.Key, owner)
-                    return &pb.GetResponse{Value: val}, nil
-                }
-            }
-            return nil, status.Errorf(codes.Internal, "Failed to GET key: %v", resp.Err)
-        }
-        return &pb.GetResponse{Value: resp.Value}, nil
-    }
-    // not responsible for this key - forward to owner
-    val, err := s.Replicator.ForwardToOwner(ctx, owner, req)
-    if err != nil {
-        return nil, status.Errorf(codes.Internal, "Failed to forward GET to owner %s: %v", owner, err)
-    }
-    log.Printf("Forwarded GET request for key %q to owner %s", req.Key, owner)
-    return &pb.GetResponse{Value: val}, nil
+					val, err := s.Replicator.ForwardToOwner(ctx, owner, req)
+					if err != nil {
+						return nil, status.Errorf(codes.Internal, "Failed to forward GET to owner %s: %v", owner, err)
+					}
+					log.Printf("Forwarded GET request for key %q to owner %s", req.Key, owner)
+					return &pb.GetResponse{Value: val}, nil
+				}
+			}
+			return nil, status.Errorf(codes.Internal, "Failed to GET key: %v", resp.Err)
+		}
+		return &pb.GetResponse{Value: resp.Value}, nil
+	}
+	// not responsible for this key - forward to owner
+	val, err := s.Replicator.ForwardToOwner(ctx, owner, req)
+	if err != nil {
+		return nil, status.Errorf(codes.Internal, "Failed to forward GET to owner %s: %v", owner, err)
+	}
+	log.Printf("Forwarded GET request for key %q to owner %s", req.Key, owner)
+	return &pb.GetResponse{Value: val}, nil
 }
 
 // gRPC Delete RPC

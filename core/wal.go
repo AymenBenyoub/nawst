@@ -23,10 +23,10 @@ type walBatch struct {
 }
 
 type Wal struct {
-	file      *os.File
-	appendCh  chan walBatch
-	closeCh   chan struct{}
-	ackMode   AckMode
+	file     *os.File
+	appendCh chan walBatch
+	closeCh  chan struct{}
+	ackMode  AckMode
 
 	nextID    uint64
 	flushedID uint64
@@ -71,7 +71,7 @@ func (w *Wal) Wait(id uint64) error {
 	if w.ackMode == AckAfterEnqueue {
 		return nil
 	}
-	
+
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	for atomic.LoadUint64(&w.flushedID) < id && w.err == nil {
