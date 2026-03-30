@@ -1,6 +1,7 @@
 package cluster
 
 import (
+	"maps"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -63,9 +64,9 @@ func NewMetricsCollector(nodeID string, bandwidthMbps int, diskPath string) *Met
 }
 
 func detectCPUCores() int {
-	c, err := cpu.Counts(true)
+	c, err := cpu.Counts(false)
 	if err != nil || c <= 0 {
-		return runtime.NumCPU()
+		return 1
 	}
 	return c
 }
@@ -116,9 +117,7 @@ func (mc *MetricsCollector) SnapshotRTT() map[string]float64 {
 	mc.mu.RLock()
 	defer mc.mu.RUnlock()
 	out := make(map[string]float64, len(mc.lastRTT))
-	for peer, v := range mc.lastRTT {
-		out[peer] = v
-	}
+	maps.Copy(out, mc.lastRTT)
 	return out
 }
 

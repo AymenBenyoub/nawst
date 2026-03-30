@@ -15,17 +15,21 @@ import (
 func main() {
 	var rpc_port = flag.Int("rpc-port", 9999, "grpc server port")
 	var rpcHost = flag.String("rpc-host", "127.0.0.1", "grpc advertise host/ip used by peers")
+
 	var raftPort = flag.Int("raft-port", 0, "raft tcp port (default rpc-port+1000)")
 	var raftBindAddr = flag.String("raft-bind-addr", "0.0.0.0", "raft bind address")
 	var raftAdvertiseIP = flag.String("raft-advertise-ip", "127.0.0.1", "raft advertise IP used by peers")
+
 	var ack = flag.Int("ack", 1, "ack mode: 0=after enqueue, 1=after flush, 2=after fsync")
+
 	var gossipBindAddr = flag.String("gossip-bind-addr", "0.0.0.0", "memberlist bind address")
 	var gossipPort = flag.Int("gossip-port", 0, "memberlist gossip port (0 selects random port on non-seed node)")
 	var gossipAdvertiseIP = flag.String("gossip-advertise-ip", "127.0.0.1", "memberlist advertise IP used by peers")
 	var seedGossipAddr = flag.String("seed-gossip-addr", "127.0.0.1:7946", "seed node memberlist address")
-	var bandwidthMbps = flag.Int("bandwidth-mbps", 1000, "estimated node NIC bandwidth in Mbps (static capacity denominator)")
+
+	var bandwidthMbps = flag.Int("bandwidth-mbps", 50, "estimated node NIC bandwidth in Mbps (static capacity denominator)")
 	var diskPath = flag.String("disk-path", "/", "filesystem path used for disk capacity/usage metrics")
-	var metricsInterval = flag.Duration("metrics-interval", 2*time.Second, "interval for collecting and gossiping node metrics")
+	var metricsInterval = flag.Duration("metrics-interval", 5*time.Second, "interval for collecting and gossiping node metrics")
 
 	var walDir = flag.String("wal-dir", "", "directory for WAL files (default: kvst/node-<rpc-port>)")
 	var replicationFactor = flag.Int("rf", 3, "replication factor for the cluster")

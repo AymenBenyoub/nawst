@@ -112,9 +112,7 @@ func (r *Replicator) HandleMetricsMessage(msg *GossipMetricsMessage) {
 	if _, ok := r.rttMatrix[msg.Metrics.NodeID]; !ok {
 		r.rttMatrix[msg.Metrics.NodeID] = make(map[string]float64)
 	}
-	for peerID, peerRTT := range msg.RTTData {
-		r.rttMatrix[msg.Metrics.NodeID][peerID] = peerRTT
-	}
+	maps.Copy(r.rttMatrix[msg.Metrics.NodeID], msg.RTTData)
 
 	if r.Rf == nil || r.Rf.IsLeader() {
 		go r.UpdatePlacement()
@@ -123,7 +121,7 @@ func (r *Replicator) HandleMetricsMessage(msg *GossipMetricsMessage) {
 
 func (r *Replicator) StartMetricsReporter(interval time.Duration) {
 	if interval <= 0 {
-		interval = 2 * time.Second
+		interval = 4 * time.Second
 	}
 
 	ticker := time.NewTicker(interval)
