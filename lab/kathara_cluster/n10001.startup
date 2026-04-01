@@ -7,17 +7,27 @@ ip link set eth0 up
 # Simulate variable network link capacities
 tc qdisc add dev eth0 root tbf rate 20mbit burst 32kbit limit 32000
 
+# Wait for the first node (n9999) to be pingable
+while ! ping -c 1 -W 1 10.0.0.9 > /dev/null 2>&1; do
+  echo "Waiting for n9999 (10.0.0.9) to come online..."
+  sleep 1
+done
+
+# Wait an extra 2 seconds to ensure the kvserver process has actually started
+sleep 2
+
 chmod +x /shared/bin/kvserver
-mkdir -p /tmp/kvst
+mkdir -p /tmp/kvst /shared/logs
 
 exec /shared/bin/kvserver \
   -rpc-port 10001 \
   -rpc-host 10.0.0.11 \
-  -gossip-bind-addr 0.0.0.0 \
+  -gossip-bind-addr 10.0.0.11 \
   -gossip-port 7948 \
   -gossip-advertise-ip 10.0.0.11 \
   -seed-gossip-addr 10.0.0.9:7946 \
+  -raft-bind-addr 127.0.0.1 \
   -rf 3 \
-  -bandwidth-mbps 20
+  -bandwidth-mbps 20 > /shared/logs/n10001.log 2>&1
 
 echo "n10001 started: rpc=10.0.0.11:10001 gossip=10.0.0.11:7948 at 20Mbps"

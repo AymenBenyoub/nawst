@@ -225,19 +225,11 @@ func (p *Placement) AssignVNodes(nodeCounts map[string]int) {
 		reassignments++
 	}
 
-	p.Epoch++
+	// Removal of p.Epoch++ -> Epoch is now strictly controlled by replication.go
+	// to prevent thrashing on tiny unnoticeable shifts.
 
-	// Log vnode distribution
-	distribution := make(map[string]int)
-	for _, v := range p.VNodes {
-		if v.Primary != "" {
-			distribution[v.Primary]++
-		}
-	}
-	log.Printf("[placement] epoch=%d vnode distribution: %v", p.Epoch, distribution)
-	if reassignments > 0 {
-		log.Printf("[placement] vnode reassignments: %d vnodes redistributed", reassignments)
-	}
+	// Returns without logging - logging is now delegated solely to replication.go
+	// when a drift is actually committed to Raft.
 }
 
 func (p *Placement) AssignReplicas(metrics []NodeMetrics, rttMatrix map[string]map[string]float64, rf int) {

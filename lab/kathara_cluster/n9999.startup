@@ -8,16 +8,17 @@ ip link set eth0 up
 tc qdisc add dev eth0 root tbf rate 100mbit burst 32kbit limit 32000
 
 chmod +x /shared/bin/kvserver
-mkdir -p /tmp/kvst
+mkdir -p /tmp/kvst /shared/logs
 
 exec /shared/bin/kvserver \
   -rpc-port 9999 \
   -rpc-host 10.0.0.9 \
-  -gossip-bind-addr 0.0.0.0 \
+  -gossip-bind-addr 10.0.0.9 \
   -gossip-port 7946 \
   -gossip-advertise-ip 10.0.0.9 \
   -seed-gossip-addr 10.0.0.9:7946 \
+  -raft-bind-addr 127.0.0.1 \
   -rf 3 \
-  -bandwidth-mbps 100
+  -bandwidth-mbps 100 > /shared/logs/n9999.log 2>&1
 
 echo "n9999 started: rpc=10.0.0.9:9999 gossip=10.0.0.9:7946 at 100Mbps"

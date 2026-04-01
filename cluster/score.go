@@ -38,9 +38,9 @@ type NodeMetrics struct {
 
 const (
 	WeightRTT  = 0.30
-	WeightCPU  = 0.20
+	WeightCPU  = 0.19
 	WeightMEM  = 0.19
-	WeightNET  = 0.21
+	WeightNET  = 0.22
 	WeightDisk = 0.10
 )
 

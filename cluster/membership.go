@@ -3,6 +3,7 @@ package cluster
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"log"
 	"sync"
 	"time"
@@ -91,7 +92,7 @@ func (n *Node) EnqueueMembershipEvent(event MembershipEvent) {
 	select {
 	case n.MembershipEvents <- event:
 	default:
-		log.Printf("membership event channel is full, dropping event: %d - node: %s", event.Type, event.NodeID)
+		return
 	}
 }
 
@@ -133,18 +134,45 @@ func (n *Node) membershipLoop() {
 		case <-n.stopCh:
 			return
 		case event := <-n.MembershipEvents:
-			log.Printf("membership event: %d - node: %s - addr: %s", event.Type, event.NodeID, event.Addr)
+			_ = event
 			n.signalReconcile()
 		}
 	}
 }
 func (n *Node) reconcileLoop() {
 	defer n.wg.Done()
+	const reconcileDebounce = 200 * time.Millisecond
+
+	var debounceTimer *time.Timer
+	var debounceC <-chan time.Time
+
+	resetDebounce := func() {
+		if debounceTimer == nil {
+			debounceTimer = time.NewTimer(reconcileDebounce)
+			debounceC = debounceTimer.C
+			return
+		}
+		if !debounceTimer.Stop() {
+			select {
+			case <-debounceTimer.C:
+			default:
+			}
+		}
+		debounceTimer.Reset(reconcileDebounce)
+		debounceC = debounceTimer.C
+	}
+
 	for {
 		select {
 		case <-n.stopCh:
+			if debounceTimer != nil {
+				debounceTimer.Stop()
+			}
 			return
 		case <-n.reconcileCh:
+			resetDebounce()
+		case <-debounceC:
+			debounceC = nil
 			if n.Ml == nil || n.Reconciler == nil {
 				continue
 			}
@@ -152,9 +180,7 @@ func (n *Node) reconcileLoop() {
 				continue
 			}
 			members := n.Ml.Members()
-			if err := n.Reconciler.ReconcileRaftWithMembership(members); err != nil {
-				log.Printf("error reconciling raft with membership: %v", err)
-			}
+			_ = n.Reconciler.ReconcileRaftWithMembership(members)
 
 		}
 	}
@@ -249,7 +275,7 @@ func (n *Node) CreateCluster() error {
 	cfg.Delegate = n
 	cfg.Events = &nodeEventDelegate{node: n}
 	cfg.AdvertisePort = n.GossipBindPort
-	log.Printf("memberlist: creation config bind=%s:%d advertise=%s:%d", cfg.BindAddr, cfg.BindPort, cfg.AdvertiseAddr, cfg.AdvertisePort)
+	cfg.Logger = log.New(io.Discard, "", 0)
 	ml, err := memberlist.Create(cfg)
 	if err != nil {
 		return err

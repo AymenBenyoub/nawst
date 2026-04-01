@@ -7,6 +7,7 @@ import (
 	"log"
 	"maps"
 	"slices"
+	"sort"
 
 	"strings"
 	"sync"
@@ -25,7 +26,7 @@ type Replicator struct {
 	Ml *memberlist.Memberlist
 	Rf *RaftNode
 
-	mu    sync.Mutex
+	mu    sync.RWMutex
 	peers map[string]pb.KVClient
 	conns map[string]*grpc.ClientConn
 
@@ -42,6 +43,16 @@ type Replicator struct {
 	stopMu   sync.Mutex
 	stopCh   chan struct{}
 
+	nodeAddrMu   sync.RWMutex
+	nodeRPCAddrs map[string]string
+
+	deadRowMu   sync.Mutex
+	deadRow     map[string]time.Time // NodeID -> Time it went missing
+	GracePeriod time.Duration
+
+	metricEMA      map[string]NodeMetrics
+	degradedStreak map[string]int
+
 	ReplicationFactor int
 }
 
@@ -53,8 +64,12 @@ func NewReplicator(id string, ml *memberlist.Memberlist, rf int) *Replicator {
 		conns:             make(map[string]*grpc.ClientConn),
 		metrics:           []NodeMetrics{},
 		rttMatrix:         make(map[string]map[string]float64),
+		nodeRPCAddrs:      make(map[string]string),
 		ReplicationFactor: rf,
 		stopCh:            make(chan struct{}),
+		deadRow:           make(map[string]time.Time),
+		metricEMA:         make(map[string]NodeMetrics),
+		degradedStreak:    make(map[string]int),
 	}
 }
 
@@ -74,7 +89,6 @@ func (r *Replicator) SetMetrics(metrics []NodeMetrics, rttMatrix map[string]map[
 	r.metrics = append([]NodeMetrics{}, metrics...)
 	r.rttMatrix = make(map[string]map[string]float64)
 	maps.Copy(r.rttMatrix, rttMatrix)
-	log.Printf("[replicator] stored metrics for %d nodes", len(metrics))
 }
 
 func (r *Replicator) SetMetricsCollector(c *MetricsCollector) {
@@ -97,26 +111,25 @@ func (r *Replicator) HandleMetricsMessage(msg *GossipMetricsMessage) {
 	r.metricsMu.Lock()
 	defer r.metricsMu.Unlock()
 
+	smoothed := r.smoothMetricsLocked(msg.Metrics)
+
 	found := false
 	for i := range r.metrics {
-		if r.metrics[i].NodeID == msg.Metrics.NodeID {
-			r.metrics[i] = msg.Metrics
+		if r.metrics[i].NodeID == smoothed.NodeID {
+			r.metrics[i] = smoothed
 			found = true
 			break
 		}
 	}
 	if !found {
-		r.metrics = append(r.metrics, msg.Metrics)
+		r.metrics = append(r.metrics, smoothed)
 	}
 
-	if _, ok := r.rttMatrix[msg.Metrics.NodeID]; !ok {
-		r.rttMatrix[msg.Metrics.NodeID] = make(map[string]float64)
+	if _, ok := r.rttMatrix[smoothed.NodeID]; !ok {
+		r.rttMatrix[smoothed.NodeID] = make(map[string]float64)
 	}
-	maps.Copy(r.rttMatrix[msg.Metrics.NodeID], msg.RTTData)
+	maps.Copy(r.rttMatrix[smoothed.NodeID], msg.RTTData)
 
-	if r.Rf == nil || r.Rf.IsLeader() {
-		go r.UpdatePlacement()
-	}
 }
 
 func (r *Replicator) StartMetricsReporter(interval time.Duration) {
@@ -124,15 +137,33 @@ func (r *Replicator) StartMetricsReporter(interval time.Duration) {
 		interval = 4 * time.Second
 	}
 
-	ticker := time.NewTicker(interval)
+	publishTicker := time.NewTicker(interval)
+	shortEvalTicker := time.NewTicker(3 * interval)
+	longEvalTicker := time.NewTicker(15 * interval)
 	go func() {
-		defer ticker.Stop()
+		defer publishTicker.Stop()
+		defer shortEvalTicker.Stop()
+		defer longEvalTicker.Stop()
+
+		initialPlacementDone := false
 		for {
 			select {
 			case <-r.stopCh:
 				return
-			case <-ticker.C:
+			case <-publishTicker.C:
 				r.publishLocalMetrics()
+				if !initialPlacementDone && (r.Rf == nil || r.Rf.IsLeader()) {
+					r.UpdatePlacement()
+					initialPlacementDone = true
+				}
+			case <-shortEvalTicker.C:
+				if r.Rf == nil || r.Rf.IsLeader() {
+					r.UpdatePlacementShortTerm()
+				}
+			case <-longEvalTicker.C:
+				if r.Rf == nil || r.Rf.IsLeader() {
+					r.UpdatePlacement()
+				}
 			}
 		}
 	}()
@@ -154,6 +185,7 @@ func (r *Replicator) publishLocalMetrics() {
 			if err != nil {
 				continue
 			}
+			r.setNodeRPCAddr(peerID, rpcAddr)
 			if peerID == r.ID {
 				continue
 			}
@@ -175,19 +207,14 @@ func (r *Replicator) publishLocalMetrics() {
 
 	b, err := EncodeGossipMetricsMessage(m, rtt)
 	if err != nil {
-		log.Printf("[metrics] encode failed: %v", err)
 		return
 	}
 	if gossipFn != nil {
-		if err := gossipFn(b); err != nil {
-			log.Printf("[metrics] gossip queue failed: %v", err)
-		}
+		_ = gossipFn(b)
 	}
 
 	LogResourceUsage(r.ID, m)
-	if r.Rf == nil || r.Rf.IsLeader() {
-		go r.UpdatePlacement()
-	}
+
 }
 
 func (r *Replicator) StopMetricsReporter() {
@@ -201,27 +228,166 @@ func (r *Replicator) StopMetricsReporter() {
 	}
 }
 
-func (r *Replicator) UpdatePlacement() {
+func (r *Replicator) UpdatePlacementShortTerm() {
 	if !r.updateMu.TryLock() {
-		log.Printf("[replicator] placement update already in progress, skipping duplicate trigger")
 		return
 	}
 	defer r.updateMu.Unlock()
 
 	if r.Rf != nil && !r.Rf.IsLeader() {
-		log.Printf("[replicator] skipping placement update on follower node %s", r.ID)
+		return
+	}
+
+	prev := r.getPlacement()
+	if prev == nil || len(prev.VNodes) != VNodeCount {
+		// Short-term role swaps require an existing committed placement.
 		return
 	}
 
 	if r.Ml == nil {
-		log.Printf("[replicator] cannot update placement: memberlist is nil")
+		return
+	}
+
+	members := r.Ml.Members()
+	if len(members) == 0 {
+		return
+	}
+
+	memberNodeIDs := make(map[string]bool)
+	for _, member := range members {
+		peerID, _, err := parseMeta(member.Meta)
+		if err != nil {
+			peerID = member.Name
+		}
+		memberNodeIDs[peerID] = true
+	}
+
+	r.metricsMu.RLock()
+	allMetrics := r.metrics
+	r.metricsMu.RUnlock()
+
+	var activeMetrics []NodeMetrics
+	for _, m := range allMetrics {
+		if memberNodeIDs[m.NodeID] {
+			activeMetrics = append(activeMetrics, m)
+		}
+	}
+
+	if len(activeMetrics) == 0 {
+		return
+	}
+
+	scores := CalculateScores(activeMetrics)
+	log.Printf("[placement-short] score snapshot: %s", formatScoreSummary(scores, 6))
+	scoreByID := make(map[string]float64, len(scores))
+	for _, s := range scores {
+		scoreByID[s.ID] = s.Score
+	}
+
+	clusterAvgRTT := averageRTT(activeMetrics)
+	degradedNow := make(map[string]bool, len(activeMetrics))
+	sustainedDegraded := make(map[string]bool, len(activeMetrics))
+	for _, m := range activeMetrics {
+		now := isSeverelyDegraded(m, clusterAvgRTT)
+		degradedNow[m.NodeID] = now
+		if now {
+			r.degradedStreak[m.NodeID]++
+		} else {
+			r.degradedStreak[m.NodeID] = 0
+		}
+		if r.degradedStreak[m.NodeID] >= 3 {
+			sustainedDegraded[m.NodeID] = true
+		}
+	}
+	log.Printf("[placement-short] degraded-now=%s sustained=%s", formatBoolNodeSet(degradedNow), formatBoolNodeSet(sustainedDegraded))
+
+	nextVNodes := cloneVNodes(prev.VNodes)
+	swaps := 0
+
+	for i := range nextVNodes {
+		v := &nextVNodes[i]
+		if v.Primary == "" || len(v.Replicas) == 0 {
+			continue
+		}
+		if !sustainedDegraded[v.Primary] {
+			continue
+		}
+
+		bestID := v.Primary
+		bestScore, ok := scoreByID[v.Primary]
+		if !ok {
+			continue
+		}
+		bestReplicaIdx := -1
+
+		for idx, replicaID := range v.Replicas {
+			if degradedNow[replicaID] {
+				continue
+			}
+			replicaScore, ok := scoreByID[replicaID]
+			if !ok {
+				continue
+			}
+			if replicaScore < bestScore*0.90 {
+				bestID = replicaID
+				bestScore = replicaScore
+				bestReplicaIdx = idx
+			}
+		}
+
+		if bestReplicaIdx >= 0 && bestID != v.Primary {
+			oldPrimary := v.Primary
+			v.Primary = bestID
+			v.Replicas[bestReplicaIdx] = oldPrimary
+			swaps++
+		}
+	}
+
+	if swaps == 0 {
+		return
+	}
+
+	shortThreshold := (VNodeCount * 1) / 100
+	if shortThreshold < 1 {
+		shortThreshold = 1
+	}
+	if swaps < shortThreshold {
+		log.Printf("[placement-short] swap delta (%d) below threshold (%d), preserving epoch %d", swaps, shortThreshold, prev.Epoch)
+		return
+	}
+
+	pl := &Placement{Epoch: prev.Epoch + 1, Nodes: scores, VNodes: nextVNodes}
+
+	if r.Rf != nil {
+		if err := r.Rf.ApplyPlacement(pl, 5*time.Second); err != nil {
+			log.Printf("[placement-short] failed to commit short-term placement: %v", err)
+			return
+		}
+		log.Printf("[placement-short] committed short-term role swaps: %d vnodes (epoch=%d)", swaps, pl.Epoch)
+		return
+	}
+
+	r.SetPlacement(pl)
+	log.Printf("[placement-short] applied short-term role swaps locally: %d vnodes (epoch=%d)", swaps, pl.Epoch)
+}
+
+func (r *Replicator) UpdatePlacement() {
+	if !r.updateMu.TryLock() {
+		return
+	}
+	defer r.updateMu.Unlock()
+
+	if r.Rf != nil && !r.Rf.IsLeader() {
+		return
+	}
+
+	if r.Ml == nil {
 		return
 	}
 
 	// Get current cluster members
 	members := r.Ml.Members()
 	if len(members) == 0 {
-		log.Printf("[replicator] cannot update placement: no members in cluster")
 		return
 	}
 
@@ -233,7 +399,6 @@ func (r *Replicator) UpdatePlacement() {
 			// Memberlist can surface nodes before metadata is fully propagated.
 			// Fall back to member.Name so placement can still track active members.
 			peerID = member.Name
-			log.Printf("[replicator] metadata unavailable for %s, using member name as node id", member.Name)
 		}
 		memberNodeIDs[peerID] = true
 	}
@@ -252,13 +417,11 @@ func (r *Replicator) UpdatePlacement() {
 	}
 
 	if len(activeMetrics) == 0 {
-		log.Printf("[replicator] cannot update placement: no metrics found for active members")
 		return
 	}
 
-	log.Printf("[replicator] updating placement for %d active nodes: %v", len(activeMetrics), memberNodeIDs)
-
 	scores := CalculateScores(activeMetrics)
+	log.Printf("[placement-long] score snapshot: %s", formatScoreSummary(scores, 8))
 	prev := r.getPlacement()
 	prevEpoch := uint64(0)
 	var prevVNodes []VNode
@@ -271,20 +434,71 @@ func (r *Replicator) UpdatePlacement() {
 
 	pl := &Placement{Epoch: prevEpoch, Nodes: scores, VNodes: prevVNodes}
 	counts := pl.GetTargetVNodeCount(scores)
+	log.Printf("[placement-long] target vnode counts: %s", formatVNodeCounts(counts))
 	pl.AssignVNodes(counts)
 	pl.AssignReplicas(activeMetrics, rttMatrix, r.ReplicationFactor)
 
-	if r.Rf != nil {
-		if err := r.Rf.ApplyPlacement(pl, 5*time.Second); err != nil {
-			log.Printf("[replicator] failed to commit placement via raft: %v", err)
+	// --- Hysteresis Logic to prevent Placement Thrashing ---
+	if prev != nil && len(prev.VNodes) == VNodeCount {
+		movedPrimaryCount := 0
+		movedReplicaCount := 0
+		for i := range VNodeCount {
+			if pl.VNodes[i].Primary != prev.VNodes[i].Primary {
+				movedPrimaryCount++
+			}
+
+			// Also check replica drift
+			if len(pl.VNodes[i].Replicas) != len(prev.VNodes[i].Replicas) {
+				movedReplicaCount++
+			} else {
+				for j, rep := range pl.VNodes[i].Replicas {
+					if rep != prev.VNodes[i].Replicas[j] {
+						movedReplicaCount++
+						break
+					}
+				}
+			}
+		}
+
+		// Calculate total drift
+
+		primaryThreshold := (VNodeCount * 5) / 100
+		replicaThreshold := (VNodeCount * (r.ReplicationFactor - 1) * 20) / 100
+
+		if movedPrimaryCount < primaryThreshold && movedReplicaCount < replicaThreshold {
+
+			// Drift is negligible. Abort update to prevent thrashing.
+			log.Printf("[placement-long] delta (%d,%d) below threshold (%d,%d), preserving epoch %d", movedPrimaryCount, movedReplicaCount, primaryThreshold, replicaThreshold, prev.Epoch)
 			return
 		}
-		log.Printf("[replicator] placement committed via raft (epoch=%d)", pl.Epoch)
+
+		pl.Epoch = prev.Epoch + 1
+		log.Printf("[placement-long] significant drift (%d,%d). incrementing epoch to %d", movedPrimaryCount, movedReplicaCount, pl.Epoch)
+	} else {
+		pl.Epoch = 1
+	}
+	// --------------------------------------------------------
+
+	// Log VNode distribution only if we are actually applying/committing it
+	distribution := make(map[string]int)
+	for _, v := range pl.VNodes {
+		if v.Primary != "" {
+			distribution[v.Primary]++
+		}
+	}
+	log.Printf("[placement] epoch=%d proposed vnode distribution: %v", pl.Epoch, distribution)
+
+	if r.Rf != nil {
+		if err := r.Rf.ApplyPlacement(pl, 5*time.Second); err != nil {
+			log.Printf("[placement-long] failed to commit placement: %v", err)
+			return
+		}
+		log.Printf("[placement-long] placement committed (epoch=%d)", pl.Epoch)
 		return
 	}
 
 	r.SetPlacement(pl)
-	log.Printf("[replicator] placement updated locally (epoch=%d) with %d active nodes", pl.Epoch, len(scores))
+	log.Printf("[placement-long] placement updated locally (epoch=%d) with %d active nodes", pl.Epoch, len(scores))
 }
 
 func (r *Replicator) ApplyPlacementFromRaft(p *Placement) {
@@ -292,7 +506,6 @@ func (r *Replicator) ApplyPlacementFromRaft(p *Placement) {
 		return
 	}
 	r.SetPlacement(p)
-	log.Printf("[replicator] applied committed placement from raft (epoch=%d)", p.Epoch)
 }
 
 func (r *Replicator) getPlacement() *Placement {
@@ -315,32 +528,172 @@ func cloneVNodes(src []VNode) []VNode {
 	return dst
 }
 
+func (r *Replicator) smoothMetricsLocked(raw NodeMetrics) NodeMetrics {
+	const alpha = 0.25
+
+	raw.CPUUsage = clampUnit(raw.CPUUsage)
+	raw.MemUsage = clampUnit(raw.MemUsage)
+	raw.NetUsage = clampUnit(raw.NetUsage)
+	raw.DiskUsage = clampUnit(raw.DiskUsage)
+
+	prev, ok := r.metricEMA[raw.NodeID]
+	if !ok {
+		r.metricEMA[raw.NodeID] = raw
+		return raw
+	}
+
+	smoothed := raw
+	smoothed.CPUUsage = alpha*raw.CPUUsage + (1-alpha)*prev.CPUUsage
+	smoothed.MemUsage = alpha*raw.MemUsage + (1-alpha)*prev.MemUsage
+	smoothed.NetUsage = alpha*raw.NetUsage + (1-alpha)*prev.NetUsage
+	smoothed.DiskUsage = alpha*raw.DiskUsage + (1-alpha)*prev.DiskUsage
+
+	if raw.AvgRTT > 0 {
+		if prev.AvgRTT <= 0 {
+			smoothed.AvgRTT = raw.AvgRTT
+		} else {
+			smoothed.AvgRTT = alpha*raw.AvgRTT + (1-alpha)*prev.AvgRTT
+		}
+	} else {
+		smoothed.AvgRTT = prev.AvgRTT
+	}
+
+	if smoothed.CPUCores <= 0 {
+		smoothed.CPUCores = prev.CPUCores
+	}
+	if smoothed.MemGB <= 0 {
+		smoothed.MemGB = prev.MemGB
+	}
+	if smoothed.BandwidthMbps <= 0 {
+		smoothed.BandwidthMbps = prev.BandwidthMbps
+	}
+	if smoothed.DiskGB <= 0 {
+		smoothed.DiskGB = prev.DiskGB
+	}
+
+	r.metricEMA[raw.NodeID] = smoothed
+	return smoothed
+}
+
+func averageRTT(metrics []NodeMetrics) float64 {
+	if len(metrics) == 0 {
+		return 0
+	}
+	var total float64
+	var count int
+	for _, m := range metrics {
+		if m.AvgRTT > 0 {
+			total += m.AvgRTT
+			count++
+		}
+	}
+	if count == 0 {
+		return 0
+	}
+	return total / float64(count)
+}
+
+func formatScoreSummary(scores []NodeInfo, limit int) string {
+	if len(scores) == 0 {
+		return "none"
+	}
+	local := append([]NodeInfo(nil), scores...)
+	sort.Slice(local, func(i, j int) bool {
+		if local[i].Score == local[j].Score {
+			return local[i].ID < local[j].ID
+		}
+		return local[i].Score < local[j].Score
+	})
+	if limit <= 0 || limit > len(local) {
+		limit = len(local)
+	}
+	parts := make([]string, 0, limit)
+	for i := 0; i < limit; i++ {
+		parts = append(parts, fmt.Sprintf("%s=%.4f", local[i].ID, local[i].Score))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func formatVNodeCounts(counts map[string]int) string {
+	if len(counts) == 0 {
+		return "none"
+	}
+	ids := make([]string, 0, len(counts))
+	for id := range counts {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	parts := make([]string, 0, len(ids))
+	for _, id := range ids {
+		parts = append(parts, fmt.Sprintf("%s=%d", id, counts[id]))
+	}
+	return strings.Join(parts, ", ")
+}
+
+func formatBoolNodeSet(nodes map[string]bool) string {
+	if len(nodes) == 0 {
+		return "none"
+	}
+	ids := make([]string, 0, len(nodes))
+	for id, ok := range nodes {
+		if ok {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) == 0 {
+		return "none"
+	}
+	sort.Strings(ids)
+	return strings.Join(ids, ",")
+}
+
+func isSeverelyDegraded(m NodeMetrics, clusterAvgRTT float64) bool {
+	if m.CPUUsage >= 0.90 {
+		return true
+	}
+	if m.DiskUsage >= 0.90 {
+		return true
+	}
+
+	rttThreshold := 120.0
+	if clusterAvgRTT > 0 {
+		candidate := 2.0 * clusterAvgRTT
+		if candidate > rttThreshold {
+			rttThreshold = candidate
+		}
+	}
+	if m.AvgRTT > 0 && m.AvgRTT >= rttThreshold {
+		return true
+	}
+
+	// Error-rate signal is not yet available in NodeMetrics.
+	return false
+}
+
+func clampUnit(v float64) float64 {
+	if v < 0 {
+		return 0
+	}
+	if v > 1 {
+		return 1
+	}
+	return v
+}
+
 func parseMeta(meta []byte) (nodeID string, rpcAddr string, err error) {
 	raw := strings.TrimSpace(string(meta))
 	if raw == "" {
 		return "", "", errors.New("empty member metadata")
 	}
 
-	if strings.Contains(raw, ",") {
-		parts := strings.Split(raw, ",")
-		if len(parts) < 2 {
-			return "", "", fmt.Errorf("invalid member metadata format: %q", raw)
-		}
-		if strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
-			return "", "", fmt.Errorf("invalid member metadata fields: %q", raw)
-		}
-		return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), nil
+	parts := strings.Split(raw, ",")
+	if len(parts) < 2 {
+		return "", "", fmt.Errorf("invalid member metadata format (expected 'nodeID,rpcAddr[,raftAddr]'): %q", raw)
 	}
-
-	parts := strings.SplitN(raw, ":", 2)
-	if len(parts) == 2 {
-		if strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
-			return "", "", fmt.Errorf("invalid member metadata fields: %q", raw)
-		}
-		return parts[0], parts[1], nil
+	if strings.TrimSpace(parts[0]) == "" || strings.TrimSpace(parts[1]) == "" {
+		return "", "", fmt.Errorf("invalid member metadata fields: %q", raw)
 	}
-
-	return "", "", fmt.Errorf("invalid member metadata format: %q", raw)
+	return strings.TrimSpace(parts[0]), strings.TrimSpace(parts[1]), nil
 }
 
 func parseMetaWithRaft(meta []byte) (nodeID string, rpcAddr string, raftAddr string, err error) {
@@ -373,39 +726,77 @@ func (r *Replicator) getOrCreateClient(member *memberlist.Node) (pb.KVClient, er
 	if err != nil {
 		return nil, fmt.Errorf("parse metadata for %s: %w", member.Name, err)
 	}
+	r.setNodeRPCAddr(peerID, rpcAddr)
+	return r.getOrCreateClientByAddr(peerID, rpcAddr)
+}
 
-	r.mu.Lock()
-	defer r.mu.Unlock()
+func (r *Replicator) getOrCreateClientByAddr(nodeID, rpcAddr string) (pb.KVClient, error) {
+    // 1. Fast path read lock
+    r.mu.RLock()
+    if c, ok := r.peers[nodeID]; ok {
+        r.mu.RUnlock()
+        return c, nil
+    }
+    r.mu.RUnlock()
 
-	if c, ok := r.peers[peerID]; ok {
-		return c, nil
+    // 2. Dial OUTSIDE the lock (prevents stalling the whole node)
+    conn, err := grpc.NewClient(rpcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+    if err != nil {
+        return nil, err
+    }
+    client := pb.NewKVClient(conn)
+
+    // 3. Write lock just to save it
+    r.mu.Lock()
+    defer r.mu.Unlock()
+    // Double-check someone else didn't make it while we were dialing
+    if c, ok := r.peers[nodeID]; ok {
+        conn.Close() // throw ours away
+        return c, nil
+    }
+    r.peers[nodeID] = client
+    r.conns[nodeID] = conn
+    return client, nil
+}
+func (r *Replicator) setNodeRPCAddr(nodeID, rpcAddr string) {
+	if strings.TrimSpace(nodeID) == "" || strings.TrimSpace(rpcAddr) == "" {
+		return
 	}
+	r.nodeAddrMu.Lock()
+	r.nodeRPCAddrs[nodeID] = rpcAddr
+	r.nodeAddrMu.Unlock()
+}
 
-	conn, err := grpc.NewClient(
-		rpcAddr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
-	if err != nil {
-		return nil, fmt.Errorf("dial %s (%s): %w", peerID, rpcAddr, err)
-	}
-
-	client := pb.NewKVClient(conn)
-	r.peers[peerID] = client
-	r.conns[peerID] = conn
-	return client, nil
+func (r *Replicator) getNodeRPCAddr(nodeID string) (string, bool) {
+	r.nodeAddrMu.RLock()
+	addr, ok := r.nodeRPCAddrs[nodeID]
+	r.nodeAddrMu.RUnlock()
+	return addr, ok
 }
 
 func (r *Replicator) getOrCreateClientByNodeID(nodeID string) (pb.KVClient, error) {
+	r.mu.Lock()
+	if c, ok := r.peers[nodeID]; ok {
+		r.mu.Unlock()
+		return c, nil
+	}
+	r.mu.Unlock()
+
+	if rpcAddr, ok := r.getNodeRPCAddr(nodeID); ok {
+		return r.getOrCreateClientByAddr(nodeID, rpcAddr)
+	}
+
 	if r.Ml == nil {
 		return nil, errors.New("memberlist is nil")
 	}
 	for _, member := range r.Ml.Members() {
-		peerID, _, err := parseMeta(member.Meta)
+		peerID, rpcAddr, err := parseMeta(member.Meta)
 		if err != nil {
 			continue
 		}
+		r.setNodeRPCAddr(peerID, rpcAddr)
 		if peerID == nodeID {
-			return r.getOrCreateClient(member)
+			return r.getOrCreateClientByAddr(peerID, rpcAddr)
 		}
 	}
 	return nil, fmt.Errorf("node %s not found in membership", nodeID)
@@ -465,29 +856,8 @@ func (r *Replicator) ReplicateToAll(ctx context.Context, op pb.Op, key string, v
 	}
 
 	if len(targets) == 0 {
-		log.Printf("[replicator] no placement targets, falling back to all members for key=%q", key)
-		for _, member := range members {
-			peerID, _, err := parseMeta(member.Meta)
-			if err != nil {
-				if firstErr == nil {
-					firstErr = fmt.Errorf("member %s metadata: %w", member.Name, err)
-				}
-				continue
-			}
-			if peerID == r.ID {
-				continue
-			}
-
-			client, err := r.getOrCreateClient(member)
-			if err != nil {
-				if firstErr == nil {
-					firstErr = err
-				}
-				continue
-			}
-
-			targets = append(targets, target{id: peerID, client: client})
-		}
+		log.Printf("[replicator] no placement targets for key=%q; keeping write local only", key)
+		return nil
 	}
 
 	remaining := len(targets)
@@ -622,7 +992,7 @@ func (r *Replicator) CheckOwnership(key string) (bool, bool, string) {
 		return true, false, ""
 	}
 	owner, replicas := pl.GetNodesForKey(key)
-	return strings.EqualFold(owner, r.ID), slices.Contains(replicas, r.ID), owner
+	return owner == r.ID, slices.Contains(replicas, r.ID), owner
 }
 
 func (r *Replicator) IsLeader() bool {
@@ -642,38 +1012,83 @@ func (r *Replicator) ReconcileRaftWithMembership(members []*memberlist.Node) err
 		return err
 	}
 
-	existing := make(map[string]raft.Server)
+	existingInRaft := make(map[string]raft.Server)
 	for _, s := range cfg.Servers {
-		existing[string(s.ID)] = s
+		existingInRaft[string(s.ID)] = s
 	}
 
-	seen := make(map[string]struct{})
+	// 1. Mark who we see in Gossip
+	seenInGossip := make(map[string]struct{})
 	for _, m := range members {
-		nodeID, _, raftAddr, err := parseMetaWithRaft(m.Meta)
-		if err != nil {
+		nodeID, rpcAddr, raftAddr, err := parseMetaWithRaft(m.Meta)
+		if err != nil || raftAddr == "" {
 			continue
 		}
-		if raftAddr == "" {
-			continue
-		}
-		seen[nodeID] = struct{}{}
-		if _, ok := existing[nodeID]; ok {
-			continue
-		}
-		if err := r.Rf.AddVoter(nodeID, raftAddr, 5*time.Second); err != nil {
-			log.Printf("[raft-reconcile] add voter failed for %s (%s): %v", nodeID, raftAddr, err)
+		r.setNodeRPCAddr(nodeID, rpcAddr)
+		seenInGossip[nodeID] = struct{}{}
+
+		// If it's a new node, add it to Raft immediately
+		if _, ok := existingInRaft[nodeID]; !ok {
+			if err := r.Rf.AddVoter(nodeID, raftAddr, 5*time.Second); err != nil {
+				_ = err
+			}
 		}
 	}
 
-	for id := range existing {
+	// 2. Handle nodes that are in Raft but MISSING from Gossip
+	r.deadRowMu.Lock()
+	defer r.deadRowMu.Unlock()
+
+	for id, server := range existingInRaft {
 		if id == r.ID {
+			continue // Don't remove ourselves!
+		}
+
+		// If the node is healthy in Gossip, make sure it's off Death Row
+		if _, ok := seenInGossip[id]; ok {
+			delete(r.deadRow, id)
 			continue
 		}
-		if _, ok := seen[id]; ok {
+
+		// Node is in Raft but MISSING from Gossip!
+		firstSeenMissing, tracking := r.deadRow[id]
+		if !tracking {
+			r.deadRow[id] = time.Now()
 			continue
 		}
-		if err := r.Rf.RemoveServer(id, 5*time.Second); err != nil {
-			log.Printf("[raft-reconcile] remove server failed for %s: %v", id, err)
+
+		// Node is on Death Row. Let's calculate its execution time.
+		gracePeriod := r.GracePeriod
+		if gracePeriod == 0 {
+			gracePeriod = 5 * time.Minute // Safe default
+		}
+
+		// --- CHECK IF IT IS A BACKUP (Non-Voter) ---
+		// If it's just a backup (NonVoter), we can use a shorter grace period.
+		// If it's a Voter, we wait the full duration to protect quorum.
+		if server.Suffrage == raft.Nonvoter {
+			gracePeriod = 1 * time.Minute // Shorter window for non-critical backups
+		}
+
+		if time.Since(firstSeenMissing) > gracePeriod {
+			if err := r.Rf.RemoveServer(id, 5*time.Second); err != nil {
+				_ = err
+			} else {
+				delete(r.deadRow, id) // Clean up after successful removal
+
+				r.mu.Lock()
+				if conn, ok := r.conns[id]; ok {
+					conn.Close()
+					delete(r.conns, id)
+					delete(r.peers, id)
+				}
+				r.mu.Unlock()
+
+				r.metricsMu.Lock()
+				delete(r.metricEMA, id)
+				delete(r.rttMatrix, id)
+				r.metricsMu.Unlock()
+			}
 		}
 	}
 

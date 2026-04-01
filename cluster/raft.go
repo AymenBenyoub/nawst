@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
 	"net"
 	"os"
 	"path/filepath"
@@ -148,6 +147,7 @@ func NewRaftNode(nodeID string, raftBindAddr string, raftDataDir string, bootstr
 
 	cfg := raft.DefaultConfig()
 	cfg.LocalID = raft.ServerID(nodeID)
+	cfg.LogOutput = io.Discard
 
 	fsm := newPlacementFSM(onApply)
 	boltDB, err := raftboltdb.NewBoltStore(filepath.Join(raftDataDir, "raft.db"))
@@ -159,7 +159,7 @@ func NewRaftNode(nodeID string, raftBindAddr string, raftDataDir string, bootstr
 		return nil, fmt.Errorf("could not create log cache: %s", err)
 	}
 	stableStore := boltDB
-	snapshotStore, err := raft.NewFileSnapshotStore(filepath.Join(raftDataDir, "snapshots"), 2, os.Stderr)
+	snapshotStore, err := raft.NewFileSnapshotStore(filepath.Join(raftDataDir, "snapshots"), 2, io.Discard)
 	if err != nil {
 		return nil, err
 	}
@@ -168,7 +168,7 @@ func NewRaftNode(nodeID string, raftBindAddr string, raftDataDir string, bootstr
 	if err != nil {
 		return nil, err
 	}
-	transport, err := raft.NewTCPTransport(raftBindAddr, addr, 3, 10*time.Second, os.Stderr)
+	transport, err := raft.NewTCPTransport(raftBindAddr, addr, 3, 10*time.Second, io.Discard)
 	if err != nil {
 		return nil, err
 	}
@@ -188,7 +188,6 @@ func NewRaftNode(nodeID string, raftBindAddr string, raftDataDir string, bootstr
 		if fut := r.BootstrapCluster(c); fut.Error() != nil && fut.Error() != raft.ErrCantBootstrap {
 			return nil, fut.Error()
 		}
-		log.Printf("[raft] bootstrapped node %s at %s", nodeID, raftBindAddr)
 	}
 
 	return rn, nil
@@ -296,7 +295,5 @@ func (rn *RaftNode) CloseBoltDB() error {
 	if err := rn.boltStore.Close(); err != nil {
 		return fmt.Errorf("error closing bolt store: %w", err)
 	}
-
-	log.Printf("[raft] node %s closed successfully", rn.nodeID)
 	return nil
 }

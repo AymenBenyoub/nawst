@@ -10,7 +10,7 @@ import (
 	"os"
 	"os/signal"
 	"strconv"
-	"sync/atomic"
+	"sync"
 	"syscall"
 	"time"
 
@@ -223,7 +223,8 @@ func (s *Server) StreamKV(stream pb.KV_StreamKVServer) error {
 	respCh := make(chan Response, 10000)
 	ctx := stream.Context()
 
-	var inFlight int64
+	var inFlight sync.WaitGroup
+	sendErrCh := make(chan error, 1)
 
 	// Receiver Goroutine: Streams ACKs back to the client
 	go func() {
@@ -233,6 +234,8 @@ func (s *Server) StreamKV(stream pb.KV_StreamKVServer) error {
 				// The client violently disconnected or timed out. Exit cleanly.
 				return
 			case resp := <-respCh:
+				inFlight.Done()
+
 				errStr := ""
 				if resp.Err != nil {
 					errStr = resp.Err.Error()
@@ -246,20 +249,30 @@ func (s *Server) StreamKV(stream pb.KV_StreamKVServer) error {
 					protoOp = pb.Op_DELETE
 				}
 				// Blast the response back to the client
-				stream.Send(&pb.StreamResp{
+				err := stream.Send(&pb.StreamResp{
 					Op:    protoOp,
 					Value: resp.Value,
 					Error: errStr,
 				})
-
-				// Mark one request as safely handled
-				atomic.AddInt64(&inFlight, -1)
+				if err != nil {
+					select {
+					case sendErrCh <- err:
+					default:
+					}
+					return
+				}
 			}
 		}
 	}()
 
 	// Sender Loop: Reads from the client stream
 	for {
+		select {
+		case err := <-sendErrCh:
+			return err
+		default:
+		}
+
 		req, err := stream.Recv()
 		if err == io.EOF {
 			break // Client sent all requests and called CloseSend()
@@ -278,7 +291,7 @@ func (s *Server) StreamKV(stream pb.KV_StreamKVServer) error {
 		}
 
 		// Track that we have a new request in flight
-		atomic.AddInt64(&inFlight, 1)
+		inFlight.Add(1)
 
 		// Send to EventLoop
 		s.reqCh <- Request{
@@ -289,18 +302,29 @@ func (s *Server) StreamKV(stream pb.KV_StreamKVServer) error {
 		}
 	}
 
-	// 🔥 GRACEFUL DRAIN 🔥
-	// The client is done sending, but the EventLoop might still be writing the final batch to disk.
-	// We wait here until every single request has been answered.
-	for atomic.LoadInt64(&inFlight) > 0 {
-		if ctx.Err() != nil {
-			break // Stop waiting if the client disconnected entirely
-		}
-		time.Sleep(1 * time.Millisecond)
-	}
+	// Graceful drain without polling: wait until all pending responses are observed.
+	drainDone := make(chan struct{})
+	go func() {
+		inFlight.Wait()
+		close(drainDone)
+	}()
 
-	// We return nil. gRPC automatically closes the stream and kills the context.
-	// Notice we DO NOT close(respCh) here, preventing the EventLoop from panicking
-	// if it happens to be running a split millisecond behind.
-	return nil
+	select {
+	case err := <-sendErrCh:
+		return err
+	case <-drainDone:
+		select {
+		case err := <-sendErrCh:
+			return err
+		default:
+		}
+		return nil
+	case <-ctx.Done():
+		select {
+		case err := <-sendErrCh:
+			return err
+		default:
+		}
+		return ctx.Err()
+	}
 }
