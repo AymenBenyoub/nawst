@@ -253,7 +253,7 @@ func (n *Node) MergeRemoteState(buf []byte, join bool) {
 }
 
 func (n *Node) CreateCluster() error {
-	cfg := memberlist.DefaultLocalConfig()
+	cfg := memberlist.DefaultLANConfig()
 	// Relax timeouts for local testing environment to avoid flakiness
 	cfg.ProbeTimeout = 2 * time.Second
 	cfg.ProbeInterval = 2 * time.Second

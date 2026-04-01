@@ -295,7 +295,7 @@ func (r *Replicator) UpdatePlacementShortTerm() {
 		} else {
 			r.degradedStreak[m.NodeID] = 0
 		}
-		if r.degradedStreak[m.NodeID] >= 3 {
+		if r.degradedStreak[m.NodeID] >= 6 {
 			sustainedDegraded[m.NodeID] = true
 		}
 	}

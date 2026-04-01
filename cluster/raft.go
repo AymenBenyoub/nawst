@@ -134,9 +134,12 @@ type RaftNode struct {
 	boltStore *raftboltdb.BoltStore
 }
 
-func NewRaftNode(nodeID string, raftBindAddr string, raftDataDir string, bootstrap bool, onApply placementApplyFn) (*RaftNode, error) {
+func NewRaftNode(nodeID string, raftBindAddr string, raftAdvertiseAddr string, raftDataDir string, bootstrap bool, onApply placementApplyFn) (*RaftNode, error) {
 	if raftBindAddr == "" {
 		return nil, fmt.Errorf("raft bind address is required")
+	}
+	if raftAdvertiseAddr == "" {
+		return nil, fmt.Errorf("raft advertise address is required")
 	}
 	if raftDataDir == "" {
 		return nil, fmt.Errorf("raft data dir is required")
@@ -164,13 +167,31 @@ func NewRaftNode(nodeID string, raftBindAddr string, raftDataDir string, bootstr
 		return nil, err
 	}
 
-	addr, err := net.ResolveTCPAddr("tcp", raftBindAddr)
+	bindAddr, err := net.ResolveTCPAddr("tcp", raftBindAddr)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("resolve raft bind address %q: %w", raftBindAddr, err)
 	}
-	transport, err := raft.NewTCPTransport(raftBindAddr, addr, 3, 10*time.Second, io.Discard)
+	advAddr, err := net.ResolveTCPAddr("tcp", raftAdvertiseAddr)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("resolve raft advertise address %q: %w", raftAdvertiseAddr, err)
+	}
+
+	// Raft rejects transports whose local bind address is unspecified.
+	// When users bind on 0.0.0.0/::, use the advertise IP as the effective bind host.
+	if bindAddr.IP == nil || bindAddr.IP.IsUnspecified() {
+		bindAddr.IP = advAddr.IP
+		if bindAddr.Zone == "" {
+			bindAddr.Zone = advAddr.Zone
+		}
+	}
+	if bindAddr.Port == 0 {
+		bindAddr.Port = advAddr.Port
+	}
+
+	effectiveBindAddr := bindAddr.String()
+	transport, err := raft.NewTCPTransport(effectiveBindAddr, advAddr, 3, 10*time.Second, io.Discard)
+	if err != nil {
+		return nil, fmt.Errorf("create raft transport (bind=%s advertise=%s): %w", effectiveBindAddr, raftAdvertiseAddr, err)
 	}
 
 	r, err := raft.NewRaft(cfg, fsm, logStore, stableStore, snapshotStore, transport)
@@ -183,7 +204,7 @@ func NewRaftNode(nodeID string, raftBindAddr string, raftDataDir string, bootstr
 	if bootstrap {
 		c := raft.Configuration{Servers: []raft.Server{{
 			ID:      raft.ServerID(nodeID),
-			Address: raft.ServerAddress(raftBindAddr),
+			Address: raft.ServerAddress(raftAdvertiseAddr),
 		}}}
 		if fut := r.BootstrapCluster(c); fut.Error() != nil && fut.Error() != raft.ErrCantBootstrap {
 			return nil, fut.Error()

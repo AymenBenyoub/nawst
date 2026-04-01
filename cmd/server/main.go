@@ -113,6 +113,7 @@ func main() {
 	rn, err := cluster.NewRaftNode(
 		nodeID,
 		fmt.Sprintf("%s:%d", *raftBindAddr, resolvedRaftPort),
+		raftAddr,
 		raftDataDir,
 		*rpc_port == 9999,
 		replicator.ApplyPlacementFromRaft,

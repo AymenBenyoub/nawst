@@ -197,11 +197,12 @@ func (s *Server) Replicate(ctx context.Context, req *pb.ReplicationRequest) (*em
 	log.Printf("[replicator] received replication request: op=%v key=%q", req.Op, req.Key)
 
 	var op OpType
-	if req.Op == pb.Op_PUT {
+	switch req.Op {
+case pb.Op_PUT:
 		op = OpPut
-	} else if req.Op == pb.Op_DELETE {
+	case pb.Op_DELETE:
 		op = OpDelete
-	} else {
+	default:
 		return nil, status.Error(codes.InvalidArgument, "Invalid operation type for replication")
 	}
 
@@ -282,11 +283,12 @@ func (s *Server) StreamKV(stream pb.KV_StreamKVServer) error {
 		}
 
 		var coreOp OpType
-		if req.Op == pb.Op_PUT {
+		switch req.Op {
+		case pb.Op_PUT:
 			coreOp = OpPut
-		} else if req.Op == pb.Op_GET {
+		case pb.Op_GET:
 			coreOp = OpGet
-		} else {
+		default:
 			coreOp = OpDelete
 		}
 
