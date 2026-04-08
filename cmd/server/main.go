@@ -18,7 +18,7 @@ func main() {
 
 	var raftPort = flag.Int("raft-port", 0, "raft tcp port (default rpc-port+1000)")
 	var raftBindAddr = flag.String("raft-bind-addr", "0.0.0.0", "raft bind address")
-	var raftAdvertiseIP = flag.String("raft-advertise-ip", "127.0.0.1", "raft advertise IP used by peers")
+	var raftAdvertiseIP = flag.String("raft-advertise-ip", "", "raft advertise IP used by peers")
 
 	var ack = flag.Int("ack", 1, "ack mode: 0=after enqueue, 1=after flush, 2=after fsync")
 
@@ -36,6 +36,9 @@ func main() {
 	flag.Parse()
 	const writerBufferSize = 64 * 1024
 	const requestChannelSize = 10000
+	if *raftAdvertiseIP == "" {
+		*raftAdvertiseIP = *rpcHost
+	}
 	// determine cross-platform data directory
 	resolvedWalDir := *walDir
 	if resolvedWalDir == "" {
