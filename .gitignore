@@ -6,3 +6,4 @@ kvserver
 stress
 kvserver_default
 context.md
+./lab/kathara_cluster/shared

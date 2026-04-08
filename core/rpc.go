@@ -94,13 +94,14 @@ func (s *Server) sendRequest(ctx context.Context, req Request) Response {
 
 // gRPC Put RPC
 func (s *Server) Put(ctx context.Context, req *pb.PutRequest) (*emptypb.Empty, error) {
+	log.Printf("[rpc] PUT request key=%q bytes=%d", req.Key, len(req.Value))
 	is_powner, _, owner := s.Replicator.CheckOwnership(req.Key)
 	if !is_powner {
 		_, err := s.Replicator.ForwardToOwner(ctx, owner, req)
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "Failed to forward PUT to owner %s: %v", owner, err)
 		}
-		log.Printf("Forwarded PUT request for key %q to owner %s", req.Key, owner)
+		log.Printf("[rpc] PUT key=%q forwarded to owner=%s", req.Key, owner)
 		return &emptypb.Empty{}, nil
 	} else {
 		resp := s.sendRequest(ctx, Request{
@@ -112,6 +113,7 @@ func (s *Server) Put(ctx context.Context, req *pb.PutRequest) (*emptypb.Empty, e
 		if resp.Err != nil {
 			return nil, status.Errorf(codes.Internal, "Failed to PUT key: %v", resp.Err)
 		}
+		log.Printf("[rpc] PUT key=%q applied locally", req.Key)
 		if s.Replicator != nil {
 			repCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 			if err := s.Replicator.ReplicateToAll(repCtx, pb.Op_PUT, req.Key, req.Value); err != nil {
@@ -121,6 +123,7 @@ func (s *Server) Put(ctx context.Context, req *pb.PutRequest) (*emptypb.Empty, e
 
 			cancel()
 		}
+		log.Printf("[rpc] PUT key=%q completed", req.Key)
 		return &emptypb.Empty{}, nil
 	}
 }
@@ -128,6 +131,7 @@ func (s *Server) Put(ctx context.Context, req *pb.PutRequest) (*emptypb.Empty, e
 // gRPC Get RPC
 
 func (s *Server) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, error) {
+	log.Printf("[rpc] GET request key=%q", req.Key)
 	is_powner, is_replica, owner := s.Replicator.CheckOwnership(req.Key)
 	if is_powner || is_replica {
 		resp := s.sendRequest(ctx, Request{
@@ -143,12 +147,13 @@ func (s *Server) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, 
 					if err != nil {
 						return nil, status.Errorf(codes.Internal, "Failed to forward GET to owner %s: %v", owner, err)
 					}
-					log.Printf("Forwarded GET request for key %q to owner %s", req.Key, owner)
+					log.Printf("[rpc] GET key=%q miss on replica; forwarded to owner=%s", req.Key, owner)
 					return &pb.GetResponse{Value: val}, nil
 				}
 			}
 			return nil, status.Errorf(codes.Internal, "Failed to GET key: %v", resp.Err)
 		}
+		log.Printf("[rpc] GET key=%q served locally", req.Key)
 		return &pb.GetResponse{Value: resp.Value}, nil
 	}
 	// not responsible for this key - forward to owner
@@ -156,12 +161,13 @@ func (s *Server) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, 
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "Failed to forward GET to owner %s: %v", owner, err)
 	}
-	log.Printf("Forwarded GET request for key %q to owner %s", req.Key, owner)
+	log.Printf("[rpc] GET key=%q forwarded to owner=%s", req.Key, owner)
 	return &pb.GetResponse{Value: val}, nil
 }
 
 // gRPC Delete RPC
 func (s *Server) Delete(ctx context.Context, req *pb.DeleteRequest) (*emptypb.Empty, error) {
+	log.Printf("[rpc] DELETE request key=%q", req.Key)
 	is_powner, _, owner := s.Replicator.CheckOwnership(req.Key)
 	if !is_powner {
 		_, err := s.Replicator.ForwardToOwner(ctx, owner, req)
@@ -169,7 +175,7 @@ func (s *Server) Delete(ctx context.Context, req *pb.DeleteRequest) (*emptypb.Em
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "Failed to forward DELETE to owner %s: %v", owner, err)
 		}
-		log.Printf("Forwarded DELETE request for key %q to owner %s", req.Key, owner)
+		log.Printf("[rpc] DELETE key=%q forwarded to owner=%s", req.Key, owner)
 		return &emptypb.Empty{}, nil
 	} else {
 		resp := s.sendRequest(ctx, Request{
@@ -180,6 +186,7 @@ func (s *Server) Delete(ctx context.Context, req *pb.DeleteRequest) (*emptypb.Em
 		if resp.Err != nil {
 			return nil, status.Errorf(codes.Internal, "Failed to DELETE key: %v", resp.Err)
 		}
+		log.Printf("[rpc] DELETE key=%q applied locally", req.Key)
 		if s.Replicator != nil {
 
 			repCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
@@ -190,6 +197,7 @@ func (s *Server) Delete(ctx context.Context, req *pb.DeleteRequest) (*emptypb.Em
 
 			cancel()
 		}
+		log.Printf("[rpc] DELETE key=%q completed", req.Key)
 		return &emptypb.Empty{}, nil
 	}
 }
@@ -198,7 +206,7 @@ func (s *Server) Replicate(ctx context.Context, req *pb.ReplicationRequest) (*em
 
 	var op OpType
 	switch req.Op {
-case pb.Op_PUT:
+	case pb.Op_PUT:
 		op = OpPut
 	case pb.Op_DELETE:
 		op = OpDelete
@@ -291,6 +299,7 @@ func (s *Server) StreamKV(stream pb.KV_StreamKVServer) error {
 		default:
 			coreOp = OpDelete
 		}
+		log.Printf("[rpc-stream] request op=%v key=%q bytes=%d", req.Op, req.Key, len(req.Value))
 
 		// Track that we have a new request in flight
 		inFlight.Add(1)

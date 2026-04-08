@@ -139,7 +139,7 @@ func (r *Replicator) StartMetricsReporter(interval time.Duration) {
 
 	publishTicker := time.NewTicker(interval)
 	shortEvalTicker := time.NewTicker(3 * interval)
-	longEvalTicker := time.NewTicker(15 * interval)
+	longEvalTicker := time.NewTicker(9 * interval)
 	go func() {
 		defer publishTicker.Stop()
 		defer shortEvalTicker.Stop()
@@ -506,6 +506,19 @@ func (r *Replicator) ApplyPlacementFromRaft(p *Placement) {
 		return
 	}
 	r.SetPlacement(p)
+
+	myVNodes := 0
+	var myReplicas []string
+	for _, v := range p.VNodes {
+		if v.Primary == r.ID {
+			myVNodes++
+			if len(myReplicas) == 0 && len(v.Replicas) > 0 {
+				myReplicas = v.Replicas
+			}
+		}
+	}
+
+	log.Printf("[placement-raft] applied epoch=%d, assigned %d vnodes, replicating to: %v", p.Epoch, myVNodes, myReplicas)
 }
 
 func (r *Replicator) getPlacement() *Placement {
@@ -731,32 +744,32 @@ func (r *Replicator) getOrCreateClient(member *memberlist.Node) (pb.KVClient, er
 }
 
 func (r *Replicator) getOrCreateClientByAddr(nodeID, rpcAddr string) (pb.KVClient, error) {
-    // 1. Fast path read lock
-    r.mu.RLock()
-    if c, ok := r.peers[nodeID]; ok {
-        r.mu.RUnlock()
-        return c, nil
-    }
-    r.mu.RUnlock()
+	// 1. Fast path read lock
+	r.mu.RLock()
+	if c, ok := r.peers[nodeID]; ok {
+		r.mu.RUnlock()
+		return c, nil
+	}
+	r.mu.RUnlock()
 
-    // 2. Dial OUTSIDE the lock (prevents stalling the whole node)
-    conn, err := grpc.NewClient(rpcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-    if err != nil {
-        return nil, err
-    }
-    client := pb.NewKVClient(conn)
+	// 2. Dial OUTSIDE the lock (prevents stalling the whole node)
+	conn, err := grpc.NewClient(rpcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		return nil, err
+	}
+	client := pb.NewKVClient(conn)
 
-    // 3. Write lock just to save it
-    r.mu.Lock()
-    defer r.mu.Unlock()
-    // Double-check someone else didn't make it while we were dialing
-    if c, ok := r.peers[nodeID]; ok {
-        conn.Close() // throw ours away
-        return c, nil
-    }
-    r.peers[nodeID] = client
-    r.conns[nodeID] = conn
-    return client, nil
+	// 3. Write lock just to save it
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	// Double-check someone else didn't make it while we were dialing
+	if c, ok := r.peers[nodeID]; ok {
+		conn.Close() // throw ours away
+		return c, nil
+	}
+	r.peers[nodeID] = client
+	r.conns[nodeID] = conn
+	return client, nil
 }
 func (r *Replicator) setNodeRPCAddr(nodeID, rpcAddr string) {
 	if strings.TrimSpace(nodeID) == "" || strings.TrimSpace(rpcAddr) == "" {
@@ -799,6 +812,21 @@ func (r *Replicator) getOrCreateClientByNodeID(nodeID string) (pb.KVClient, erro
 			return r.getOrCreateClientByAddr(peerID, rpcAddr)
 		}
 	}
+	for attempt := 0; attempt < 3; attempt++ {
+		for _, member := range r.Ml.Members() {
+			peerID, rpcAddr, err := parseMeta(member.Meta)
+			if err != nil {
+				continue
+			}
+			r.setNodeRPCAddr(peerID, rpcAddr)
+			if peerID == nodeID {
+				return r.getOrCreateClientByAddr(peerID, rpcAddr)
+			}
+		}
+		if attempt < 2 {
+			time.Sleep(200 * time.Millisecond)
+		}
+	}
 	return nil, fmt.Errorf("node %s not found in membership", nodeID)
 }
 
@@ -830,8 +858,13 @@ func (r *Replicator) ReplicateToAll(ctx context.Context, op pb.Op, key string, v
 	targets := make([]target, 0, len(members)-1)
 	var firstErr error
 
-	pl := r.getPlacement()
-	if pl != nil && len(pl.VNodes) == VNodeCount {
+	resolveTargetsFromPlacement := func() {
+		targets = targets[:0]
+		pl := r.getPlacement()
+		if pl == nil || len(pl.VNodes) != VNodeCount {
+			return
+		}
+
 		_, replicas := pl.GetNodesForKey(key)
 		log.Printf("[replicator] key=%q routes to replicas: %v", key, replicas)
 		seen := make(map[string]struct{})
@@ -848,11 +881,32 @@ func (r *Replicator) ReplicateToAll(ctx context.Context, op pb.Op, key string, v
 			if err != nil {
 				if firstErr == nil {
 					firstErr = err
+					fmt.Printf("%v", firstErr)
 				}
+
 				continue
 			}
 			targets = append(targets, target{id: replicaID, client: client})
 		}
+
+	}
+
+	resolveTargetsFromPlacement()
+
+	if len(targets) == 0 {
+		// Docker startup commonly reaches epoch 1 (single-node ring) before full metrics/raft settle.
+		// If we can lead placement, force one immediate long-term refresh and retry once.
+		if r.Rf != nil && r.Rf.IsLeader() {
+			r.UpdatePlacement()
+			resolveTargetsFromPlacement()
+		}
+	}
+
+	if len(targets) == 0 && len(members) > 1 {
+		// Strict placement adherence: if we know there are other members but Raft hasn't
+		// given us a valid placement yet, return an error to force client retries instead
+		// of silently falling back to a local-only write or gossip-based random targets.
+		return fmt.Errorf("placement not ready: waiting for Raft placement sync")
 	}
 
 	if len(targets) == 0 {
@@ -917,20 +971,21 @@ func (r *Replicator) ReplicateToAll(ctx context.Context, op pb.Op, key string, v
 		close(resultCh)
 	}()
 
+	quorumReached := acks >= required
+
 	for err := range resultCh {
 		remaining--
 
 		if err == nil {
 			acks++
 			if acks >= required {
-				cancel()
-				return nil
+				quorumReached = true
 			}
 		} else if firstErr == nil {
 			firstErr = err
 		}
 
-		if acks+remaining < required {
+		if !quorumReached && acks+remaining < required {
 			cancel()
 			if firstErr != nil {
 				return fmt.Errorf("write quorum not reached: got %d/%d acks: %w", acks, required, firstErr)
@@ -939,7 +994,7 @@ func (r *Replicator) ReplicateToAll(ctx context.Context, op pb.Op, key string, v
 		}
 	}
 
-	if acks >= required {
+	if quorumReached {
 		return nil
 	}
 	if firstErr != nil {

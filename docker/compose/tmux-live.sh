@@ -38,8 +38,9 @@ tmux split-window -h -t "$SESSION":0 "cd '$ROOT_DIR' && docker compose logs --ta
 tmux split-window -v -t "$SESSION":0.0 "cd '$ROOT_DIR' && docker compose logs --tail=50 -f node10001"
 tmux split-window -v -t "$SESSION":0.1 "cd '$ROOT_DIR' && docker compose logs --tail=50 -f node10002"
 
-# Extra window for quick client access (opens kvcli directly)
-tmux new-window -t "$SESSION" -n client "cd '$ROOT_DIR' && docker compose exec client /workspace/kvcli -addr node9999:9999"
+# Extra window for quick client access.
+# After `quit` in kvcli, stay in an interactive shell so the pane is still usable.
+tmux new-window -t "$SESSION" -n client "cd '$ROOT_DIR' && docker compose exec client sh -lc '/workspace/kvcli -addr node9999:9999; echo; echo [client] kvcli exited; exec sh'"
 
 tmux select-layout -t "$SESSION":0 tiled
 tmux set-option -t "$SESSION" remain-on-exit on

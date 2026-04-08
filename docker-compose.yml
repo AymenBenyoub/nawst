@@ -8,15 +8,15 @@ services:
     cap_add: ["NET_ADMIN", "NET_RAW"]
     environment:
       RPC_PORT: "9999"
-      NODE_IP: "10.44.0.9"
+      NODE_IP: "10.0.0.9"
       RAFT_BIND_ADDR: "0.0.0.0"
-      RAFT_ADVERTISE_IP: "10.44.0.9"
+      RAFT_ADVERTISE_IP: "10.0.0.9"
       GOSSIP_PORT: "7946"
-      SEED_GOSSIP_ADDR: "10.44.0.9:7946"
+      SEED_GOSSIP_ADDR: "10.0.0.9:7946"
       BANDWIDTH_MBPS: "200"
       METRICS_INTERVAL: "4s"
       RF: "3"
-      TC_RULES: "10.44.0.10,120mbit,8ms;10.44.0.11,60mbit,20ms;10.44.0.12,20mbit,40ms"
+      TC_RULES: "10.0.0.10,120mbit,8ms;10.0.0.11,60mbit,20ms;10.0.0.12,20mbit,40ms"
     volumes:
       - ./:/workspace
       - node9999_data:/data
@@ -24,7 +24,7 @@ services:
       - "9999:9999"
     networks:
       kvnet:
-        ipv4_address: 10.44.0.9
+        ipv4_address: 10.0.0.9
 
   node10000:
     build:
@@ -36,15 +36,15 @@ services:
     cap_add: ["NET_ADMIN", "NET_RAW"]
     environment:
       RPC_PORT: "10000"
-      NODE_IP: "10.44.0.10"
+      NODE_IP: "10.0.0.10"
       RAFT_BIND_ADDR: "0.0.0.0"
-      RAFT_ADVERTISE_IP: "10.44.0.10"
+      RAFT_ADVERTISE_IP: "10.0.0.10"
       GOSSIP_PORT: "7947"
-      SEED_GOSSIP_ADDR: "10.44.0.9:7946"
+      SEED_GOSSIP_ADDR: "10.0.0.9:7946"
       BANDWIDTH_MBPS: "150"
       METRICS_INTERVAL: "4s"
       RF: "3"
-      TC_RULES: "10.44.0.9,120mbit,8ms;10.44.0.11,80mbit,12ms;10.44.0.12,35mbit,28ms"
+      TC_RULES: "10.0.0.9,120mbit,8ms;10.0.0.11,80mbit,12ms;10.0.0.12,35mbit,28ms"
     volumes:
       - ./:/workspace
       - node10000_data:/data
@@ -52,7 +52,7 @@ services:
       - "10000:10000"
     networks:
       kvnet:
-        ipv4_address: 10.44.0.10
+        ipv4_address: 10.0.0.10
 
   node10001:
     build:
@@ -64,15 +64,15 @@ services:
     cap_add: ["NET_ADMIN", "NET_RAW"]
     environment:
       RPC_PORT: "10001"
-      NODE_IP: "10.44.0.11"
+      NODE_IP: "10.0.0.11"
       RAFT_BIND_ADDR: "0.0.0.0"
-      RAFT_ADVERTISE_IP: "10.44.0.11"
+      RAFT_ADVERTISE_IP: "10.0.0.11"
       GOSSIP_PORT: "7948"
-      SEED_GOSSIP_ADDR: "10.44.0.9:7946"
+      SEED_GOSSIP_ADDR: "10.0.0.9:7946"
       BANDWIDTH_MBPS: "100"
       METRICS_INTERVAL: "4s"
       RF: "3"
-      TC_RULES: "10.44.0.9,60mbit,20ms;10.44.0.10,80mbit,12ms;10.44.0.12,25mbit,18ms"
+      TC_RULES: "10.0.0.9,60mbit,20ms;10.0.0.10,80mbit,12ms;10.0.0.12,25mbit,18ms"
     volumes:
       - ./:/workspace
       - node10001_data:/data
@@ -80,7 +80,7 @@ services:
       - "10001:10001"
     networks:
       kvnet:
-        ipv4_address: 10.44.0.11
+        ipv4_address: 10.0.0.11
 
   node10002:
     build:
@@ -92,15 +92,15 @@ services:
     cap_add: ["NET_ADMIN", "NET_RAW"]
     environment:
       RPC_PORT: "10002"
-      NODE_IP: "10.44.0.12"
+      NODE_IP: "10.0.0.12"
       RAFT_BIND_ADDR: "0.0.0.0"
-      RAFT_ADVERTISE_IP: "10.44.0.12"
+      RAFT_ADVERTISE_IP: "10.0.0.12"
       GOSSIP_PORT: "7949"
-      SEED_GOSSIP_ADDR: "10.44.0.9:7946"
+      SEED_GOSSIP_ADDR: "10.0.0.9:7946"
       BANDWIDTH_MBPS: "60"
       METRICS_INTERVAL: "4s"
       RF: "3"
-      TC_RULES: "10.44.0.9,20mbit,40ms;10.44.0.10,35mbit,28ms;10.44.0.11,25mbit,18ms"
+      TC_RULES: "10.0.0.9,20mbit,40ms;10.0.0.10,35mbit,28ms;10.0.0.11,25mbit,18ms"
     volumes:
       - ./:/workspace
       - node10002_data:/data
@@ -108,7 +108,7 @@ services:
       - "10002:10002"
     networks:
       kvnet:
-        ipv4_address: 10.44.0.12
+        ipv4_address: 10.0.0.12
 
   client:
     build:
@@ -121,14 +121,14 @@ services:
       - ./:/workspace
     networks:
       kvnet:
-        ipv4_address: 10.44.0.100
+        ipv4_address: 10.0.0.100
 
 networks:
   kvnet:
     driver: bridge
     ipam:
       config:
-        - subnet: 10.44.0.0/24
+        - subnet: 10.0.0.0/24
 
 volumes:
   node9999_data:
