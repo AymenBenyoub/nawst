@@ -106,7 +106,9 @@ func (w *Wal) writerLoop(bufferSize int) {
 		select {
 		case batch := <-w.appendCh:
 			for _, cmd := range batch.cmds {
-				needed := 1 + binary.MaxVarintLen64*2 + len(cmd.Key) + len(cmd.Value)
+				// needed = opType(1) + vnodeID(2) + version(8) + keyLen(uvarint) + key + valLen(uvarint) + value
+				// Conservative estimate with max varint sizes.
+				needed := 1 + 2 + 8 + binary.MaxVarintLen64*2 + len(cmd.Key) + len(cmd.Value)
 
 				// Flush if full. Grow buffer if a single command is massive.
 				if pos+needed > len(buf) {
@@ -119,8 +121,15 @@ func (w *Wal) writerLoop(bufferSize int) {
 					}
 				}
 
+				// Encode: Op (1 byte) | VNodeID (2 bytes, big-endian) | Version (8 bytes, big-endian) | keyLen | key | valLen | value
 				buf[pos] = byte(cmd.Op)
 				pos++
+
+				binary.BigEndian.PutUint16(buf[pos:], cmd.VNodeID)
+				pos += 2
+
+				binary.BigEndian.PutUint64(buf[pos:], cmd.Version)
+				pos += 8
 
 				n := binary.PutUvarint(buf[pos:], uint64(len(cmd.Key)))
 				pos += n
@@ -164,6 +173,7 @@ func (w *Wal) Close() error {
 }
 
 // MUST be called before NewWal starts the writer goroutine.
+// Replay format: Op | VNodeID (2 bytes) | Version (8 bytes) | keyLen | key | valLen | value
 func ReplayWal(path string, apply func(Command) error) error {
 	f, err := os.Open(path)
 	if err != nil {
@@ -181,6 +191,20 @@ func ReplayWal(path string, apply func(Command) error) error {
 		if err != nil {
 			return err
 		}
+
+		// Read vnode ID (2 bytes, big-endian)
+		vnodeBytes := make([]byte, 2)
+		if _, err := io.ReadFull(r, vnodeBytes); err != nil {
+			return err
+		}
+		vnodeID := binary.BigEndian.Uint16(vnodeBytes)
+
+		// Read version (8 bytes, big-endian)
+		versionBytes := make([]byte, 8)
+		if _, err := io.ReadFull(r, versionBytes); err != nil {
+			return err
+		}
+		version := binary.BigEndian.Uint64(versionBytes)
 
 		keyLen, err := binary.ReadUvarint(r)
 		if err != nil {
@@ -201,9 +225,11 @@ func ReplayWal(path string, apply func(Command) error) error {
 		}
 
 		if err := apply(Command{
-			Op:    OpType(op),
-			Key:   string(key),
-			Value: val,
+			Op:      OpType(op),
+			Key:     string(key),
+			Value:   val,
+			VNodeID: vnodeID,
+			Version: version,
 		}); err != nil {
 			return err
 		}

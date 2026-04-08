@@ -71,6 +71,19 @@ func (p *Placement) GetNodesForKey(key string) (primary string, replicas []strin
 	return vnode.Primary, vnode.Replicas
 }
 
+// GetVNodeIDForKey returns the vnode ID that owns a key.
+// O(1) arithmetic division; same as GetNodesForKey but returns only the vnode ID.
+// Used by the RPC layer to annotate commands with ownership info.
+func (p *Placement) GetVNodeIDForKey(key string) uint16 {
+	if len(p.VNodes) != VNodeCount {
+		return 0 // Safety fallback
+	}
+
+	token := HashKey(key)
+	vnodeIdx, _ := bits.Mul64(token, uint64(VNodeCount))
+	return p.VNodes[vnodeIdx].ID
+}
+
 // GetTargetVNodeCount calculates how many VNodes each node deserves based on its Score.
 func (p *Placement) GetTargetVNodeCount(nodes []NodeInfo) map[string]int {
 	counts := make(map[string]int)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"maps"
 	"slices"
@@ -13,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/AymenBenyoub/nawst/core"
 	pb "github.com/AymenBenyoub/nawst/core/proto"
 	"github.com/hashicorp/memberlist"
 	"github.com/hashicorp/raft"
@@ -54,6 +56,11 @@ type Replicator struct {
 	degradedStreak map[string]int
 
 	ReplicationFactor int
+	transferApplyFn   func(core.Command) error
+	transferDropFn    func(uint16) error
+
+	migMu           sync.RWMutex
+	migrationSource map[uint16]string // vnode -> preferred source node during catch-up
 }
 
 func NewReplicator(id string, ml *memberlist.Memberlist, rf int) *Replicator {
@@ -68,13 +75,69 @@ func NewReplicator(id string, ml *memberlist.Memberlist, rf int) *Replicator {
 		ReplicationFactor: rf,
 		stopCh:            make(chan struct{}),
 		deadRow:           make(map[string]time.Time),
+		GracePeriod:       2 * time.Second,
 		metricEMA:         make(map[string]NodeMetrics),
 		degradedStreak:    make(map[string]int),
+		migrationSource:   make(map[uint16]string),
 	}
 }
 
 func (r *Replicator) SetRaft(rfNode *RaftNode) {
 	r.Rf = rfNode
+}
+
+// SetTransferApplier sets the function used to apply transferred vnode entries locally.
+// Recommended implementation routes through the normal write path so WAL/event-loop semantics are preserved.
+func (r *Replicator) SetTransferApplier(fn func(core.Command) error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.transferApplyFn = fn
+}
+
+func (r *Replicator) getTransferApplier() func(core.Command) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.transferApplyFn
+}
+
+func (r *Replicator) SetTransferDropper(fn func(uint16) error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.transferDropFn = fn
+}
+
+func (r *Replicator) getTransferDropper() func(uint16) error {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.transferDropFn
+}
+
+func (r *Replicator) setMigrationSource(vnodeID uint16, source string) {
+	r.migMu.Lock()
+	defer r.migMu.Unlock()
+	if strings.TrimSpace(source) == "" {
+		delete(r.migrationSource, vnodeID)
+		return
+	}
+	r.migrationSource[vnodeID] = source
+}
+
+func (r *Replicator) clearMigrationSource(vnodeID uint16) {
+	r.migMu.Lock()
+	delete(r.migrationSource, vnodeID)
+	r.migMu.Unlock()
+}
+
+func (r *Replicator) GetMigrationSourceForKey(key string) string {
+	pl := r.getPlacement()
+	if pl == nil {
+		return ""
+	}
+	vnodeID := pl.GetVNodeIDForKey(key)
+	r.migMu.RLock()
+	src := r.migrationSource[vnodeID]
+	r.migMu.RUnlock()
+	return src
 }
 
 func (r *Replicator) SetPlacement(p *Placement) {
@@ -505,20 +568,171 @@ func (r *Replicator) ApplyPlacementFromRaft(p *Placement) {
 	if p == nil {
 		return
 	}
+
+	// Compare old placement to new to detect changes
+	oldPl := r.getPlacement()
 	r.SetPlacement(p)
 
-	myVNodes := 0
-	var myReplicas []string
+	// If this is the first placement, skip migration (no old vnodes to compare)
+	if oldPl == nil {
+		myVNodes := 0
+		var myReplicas []string
+		for _, v := range p.VNodes {
+			if v.Primary == r.ID {
+				myVNodes++
+				if len(myReplicas) == 0 && len(v.Replicas) > 0 {
+					myReplicas = v.Replicas
+				}
+			}
+		}
+		log.Printf("[placement-raft] initial placement epoch=%d, assigned %d vnodes, replicating to: %v", p.Epoch, myVNodes, myReplicas)
+		return
+	}
+
+	// Build vnode maps for old and new placement
+	// oldMap[vnodeID] = nodeName (the old primary)
+	// newMap[vnodeID] = nodeName (the new primary)
+	oldMap := make(map[uint16]string, len(oldPl.VNodes))
+	for _, v := range oldPl.VNodes {
+		oldMap[v.ID] = v.Primary
+	}
+
+	newMap := make(map[uint16]string, len(p.VNodes))
 	for _, v := range p.VNodes {
-		if v.Primary == r.ID {
-			myVNodes++
-			if len(myReplicas) == 0 && len(v.Replicas) > 0 {
-				myReplicas = v.Replicas
+		newMap[v.ID] = v.Primary
+	}
+
+	// Detect changes: ownership and replica membership deltas.
+	var gainedVNodes []uint16       // Newly promoted to primary
+	var lostVNodes []uint16         // No longer primary
+	var changedReplicas []uint16    // Still primary but replica set changed
+	var addedReplicaVNodes []uint16 // Newly added as replica
+
+	for vnodeID := range newMap {
+		oldOwner := oldMap[vnodeID]
+		newOwner := newMap[vnodeID]
+
+		if oldOwner == r.ID && newOwner != r.ID {
+			// Lost primary: was owner, no longer
+			lostVNodes = append(lostVNodes, vnodeID)
+		} else if oldOwner != r.ID && newOwner == r.ID {
+			// Gained primary: now owner, wasn't before
+			gainedVNodes = append(gainedVNodes, vnodeID)
+		} else if oldOwner == newOwner && oldOwner == r.ID {
+			// Still primary: check if replica set changed
+			oldReplicas := oldPl.VNodes[vnodeID].Replicas
+			newReplicas := p.VNodes[vnodeID].Replicas
+			if !slices.Equal(oldReplicas, newReplicas) {
+				changedReplicas = append(changedReplicas, vnodeID)
+			}
+		} else {
+			oldReplicas := oldPl.VNodes[vnodeID].Replicas
+			newReplicas := p.VNodes[vnodeID].Replicas
+			if !slices.Contains(oldReplicas, r.ID) && slices.Contains(newReplicas, r.ID) {
+				addedReplicaVNodes = append(addedReplicaVNodes, vnodeID)
 			}
 		}
 	}
 
-	log.Printf("[placement-raft] applied epoch=%d, assigned %d vnodes, replicating to: %v", p.Epoch, myVNodes, myReplicas)
+	log.Printf("[placement-raft] epoch=%d->%d: gained=%d lost=%d primary-replica-changes=%d new-replicas=%d",
+		oldPl.Epoch, p.Epoch, len(gainedVNodes), len(lostVNodes), len(changedReplicas), len(addedReplicaVNodes))
+
+	// Start async migration goroutines (non-blocking return)
+	go func() {
+		// 1. Gain vnodes from old primary (or replicas if primary is down)
+		for _, vnodeID := range gainedVNodes {
+			oldOwner := oldMap[vnodeID]
+			candidates := make([]string, 0, 1+len(oldPl.VNodes[vnodeID].Replicas)+len(p.VNodes[vnodeID].Replicas))
+			if oldOwner != "" && oldOwner != r.ID {
+				candidates = append(candidates, oldOwner)
+			}
+			for _, n := range oldPl.VNodes[vnodeID].Replicas {
+				if n != "" && n != r.ID && !slices.Contains(candidates, n) {
+					candidates = append(candidates, n)
+				}
+			}
+			for _, n := range p.VNodes[vnodeID].Replicas {
+				if n != "" && n != r.ID && !slices.Contains(candidates, n) {
+					candidates = append(candidates, n)
+				}
+			}
+
+			if len(candidates) > 0 {
+				r.setMigrationSource(vnodeID, candidates[0])
+			}
+
+			var transferErr error
+			success := false
+			for _, src := range candidates {
+				if err := r.transferVNodeFrom(src, vnodeID, p.Epoch); err != nil {
+					transferErr = err
+					log.Printf("[migration] transfer attempt failed vnode=%d source=%s err=%v", vnodeID, src, err)
+					continue
+				}
+				log.Printf("[migration] successfully gained vnode=%d from %s", vnodeID, src)
+				success = true
+				break
+			}
+			if !success {
+				log.Printf("[migration] failed to gain vnode=%d from all candidates=%v last_err=%v", vnodeID, candidates, transferErr)
+			} else {
+				r.clearMigrationSource(vnodeID)
+			}
+		}
+
+		// 1b. Newly-added replicas must catch up from primary/other replicas.
+		for _, vnodeID := range addedReplicaVNodes {
+			owner := newMap[vnodeID]
+			candidates := make([]string, 0, 1+len(p.VNodes[vnodeID].Replicas))
+			if owner != "" && owner != r.ID {
+				candidates = append(candidates, owner)
+			}
+			for _, rep := range p.VNodes[vnodeID].Replicas {
+				if rep != "" && rep != r.ID && !slices.Contains(candidates, rep) {
+					candidates = append(candidates, rep)
+				}
+			}
+
+			var transferErr error
+			success := false
+			for _, src := range candidates {
+				if err := r.transferVNodeFrom(src, vnodeID, p.Epoch); err != nil {
+					transferErr = err
+					continue
+				}
+				success = true
+				break
+			}
+			if !success {
+				log.Printf("[migration] failed to catch up new replica vnode=%d candidates=%v err=%v", vnodeID, candidates, transferErr)
+			} else {
+				log.Printf("[migration] caught up new replica vnode=%d", vnodeID)
+			}
+		}
+
+		// 2. Delete lost vnodes after grace period.
+		dropFn := r.getTransferDropper()
+		if dropFn == nil {
+			log.Printf("[migration] transfer dropper not configured; skipping lost vnode cleanup")
+		}
+		for _, vnodeID := range lostVNodes {
+			if r.GracePeriod > 0 {
+				time.Sleep(r.GracePeriod)
+			}
+			if dropFn != nil {
+				if err := dropFn(vnodeID); err != nil {
+					log.Printf("[migration] failed dropping lost vnode=%d: %v", vnodeID, err)
+				} else {
+					log.Printf("[migration] dropped lost vnode=%d", vnodeID)
+				}
+			}
+			r.clearMigrationSource(vnodeID)
+		}
+
+		// 3. Update replica set for changed vnodes
+		// (In future: may need to transfer to new replicas or notify old replicas)
+		log.Printf("[migration] processing %d vnodes with replica set changes", len(changedReplicas))
+	}()
 }
 
 func (r *Replicator) getPlacement() *Placement {
@@ -830,7 +1044,7 @@ func (r *Replicator) getOrCreateClientByNodeID(nodeID string) (pb.KVClient, erro
 	return nil, fmt.Errorf("node %s not found in membership", nodeID)
 }
 
-func (r *Replicator) ReplicateToAll(ctx context.Context, op pb.Op, key string, value []byte) error {
+func (r *Replicator) ReplicateToAll(ctx context.Context, op pb.Op, key string, value []byte, vnodeID uint16, version uint64) error {
 	if r.Ml == nil {
 		return errors.New("memberlist is nil")
 	}
@@ -940,9 +1154,11 @@ func (r *Replicator) ReplicateToAll(ctx context.Context, op pb.Op, key string, v
 				defer cCancel()
 			}
 			req := &pb.ReplicationRequest{
-				Op:    op,
-				Key:   key,
-				Value: value,
+				Op:      op,
+				Key:     key,
+				Value:   value,
+				VnodeId: uint32(vnodeID),
+				Version: version,
 			}
 
 			log.Printf("[replicator] sending replication request to %s: op=%v key=%q", pid, op, key)
@@ -1004,11 +1220,13 @@ func (r *Replicator) ReplicateToAll(ctx context.Context, op pb.Op, key string, v
 }
 
 func (r *Replicator) ReplicatePut(ctx context.Context, key string, value []byte) error {
-	return r.ReplicateToAll(ctx, pb.Op_PUT, key, value)
+	vnodeID := r.GetVNodeForKey(key)
+	return r.ReplicateToAll(ctx, pb.Op_PUT, key, value, vnodeID, 0)
 }
 
 func (r *Replicator) ReplicateDelete(ctx context.Context, key string) error {
-	return r.ReplicateToAll(ctx, pb.Op_DELETE, key, nil)
+	vnodeID := r.GetVNodeForKey(key)
+	return r.ReplicateToAll(ctx, pb.Op_DELETE, key, nil, vnodeID, 0)
 }
 func retryReplication(pid string, c pb.KVClient, req *pb.ReplicationRequest, cctx context.Context) error {
 	const maxAttempts = 3
@@ -1048,6 +1266,114 @@ func (r *Replicator) CheckOwnership(key string) (bool, bool, string) {
 	}
 	owner, replicas := pl.GetNodesForKey(key)
 	return owner == r.ID, slices.Contains(replicas, r.ID), owner
+}
+
+// GetVNodeForKey returns the vnode ID that owns a key.
+// Called by RPC layer to annotate commands with vnode ownership.
+// O(1) operation using the same arithmetic division as GetNodesForKey.
+func (r *Replicator) GetVNodeForKey(key string) uint16 {
+	pl := r.getPlacement()
+	if pl == nil {
+		return 0 // Fallback if placement not initialized
+	}
+	return pl.GetVNodeIDForKey(key)
+}
+
+// transferVNodeFrom requests a vnode snapshot from a source node and applies it locally.
+// Called during placement migration when this node becomes primary for a vnode it didn't own before.
+// 1. Opens streaming RPC to source node
+// 2. Requests vnode snapshot by ID
+// 3. Streams entries back and applies each entry to local store
+// 4. Returns error if source unreachable or snapshot transfer fails
+//
+// Concurrency: Runs async from ApplyPlacementFromRaft; safe to call multiple times concurrently
+// (each call goes to different source nodes).
+//
+// Conflict resolution: Each entry includes version; local store may drop older versions.
+// (TODO: Implement version-aware merge for concurrent writes during migration.)
+func (r *Replicator) transferVNodeFrom(sourceNodeID string, vnodeID uint16, epoch uint64) error {
+	applyFn := r.getTransferApplier()
+	if applyFn == nil {
+		return fmt.Errorf("transfer applier not configured")
+	}
+
+	// Get RPC client for source node
+	client, err := r.getOrCreateClientByNodeID(sourceNodeID)
+	if err != nil {
+		return fmt.Errorf("failed to get client for %s: %w", sourceNodeID, err)
+	}
+
+	// Open bidirectional stream
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	stream, err := client.TransferVNode(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to open transfer stream to %s: %w", sourceNodeID, err)
+	}
+
+	// Send request for this vnode
+	if err := stream.Send(&pb.VNodeTransferReq{
+		VnodeId:        uint32(vnodeID),
+		PlacementEpoch: epoch,
+	}); err != nil {
+		return fmt.Errorf("failed to send transfer request: %w", err)
+	}
+
+	// Stream and apply entries
+	var entriesReceived int
+	for {
+		resp, err := stream.Recv()
+		if err == io.EOF {
+			break // Stream closed normally
+		}
+		if err != nil {
+			return fmt.Errorf("failed to receive snapshot entry: %w", err)
+		}
+
+		// Check for error in response
+		if resp.Error != "" {
+			return fmt.Errorf("source node returned error: %s", resp.Error)
+		}
+
+		// End-of-stream marker
+		if resp.EmptyEntries {
+			log.Printf("[transfer] received end-of-stream for vnode=%d", vnodeID)
+			break
+		}
+
+		// Apply entry locally
+		// Entries have key, value, version from snapshot.
+		// Apply to store with vnode context preserved.
+		entriesReceived++
+
+		// TODO: For now, skipping version-aware merge. In production:
+		// - Compare resp.Version with local version for this key
+		// - Drop if local version is newer (avoid overwriting concurrent writes)
+		// - Apply if remote version is newer or key is new
+		//
+		// For this MVP, assume source is authoritative.
+		op := core.OpPut
+		if resp.Tombstone {
+			op = core.OpDelete
+		}
+		cmd := core.Command{
+			Op:      op,
+			Key:     resp.Key,
+			Value:   resp.Value,
+			VNodeID: uint16(resp.VnodeId),
+			Version: resp.Version,
+		}
+		if err := applyFn(cmd); err != nil {
+			return fmt.Errorf("failed applying transferred entry key=%q vnode=%d: %w", resp.Key, resp.VnodeId, err)
+		}
+
+		// Applied through transfer applier callback, which should route through normal write path.
+		// TODO: Add per-vnode replay queue to reduce interleaving during high write pressure.
+	}
+
+	log.Printf("[transfer] applied %d entries for vnode=%d from %s", entriesReceived, vnodeID, sourceNodeID)
+	return nil
 }
 
 func (r *Replicator) IsLeader() bool {

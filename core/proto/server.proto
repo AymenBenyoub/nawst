@@ -10,6 +10,7 @@ service KV {
     rpc Delete(DeleteRequest) returns (google.protobuf.Empty);
     rpc Replicate(ReplicationRequest) returns (google.protobuf.Empty);
     rpc StreamKV(stream StreamReq) returns (stream StreamResp);
+    rpc TransferVNode(stream VNodeTransferReq) returns (stream VNodeTransferResp);
 }
 
 message GetRequest {
@@ -34,6 +35,8 @@ message ReplicationRequest {
     Op op =1 ;
     string key = 2;
     bytes value =3;
+    uint32 vnode_id = 4;
+    uint64 version = 5;
 }
 enum Op {
     PUT = 0;
@@ -52,4 +55,29 @@ message StreamResp {
     bytes value = 2; // Only populated for GET
     string error = 3; 
 }
+
+// VNodeTransferReq initiates vnode snapshot transfer.
+// Client sends metadata in first message, then receives streaming responses with data.
+message VNodeTransferReq {
+    uint32 vnode_id = 1;        // Vnode ID to transfer (0..1023)
+    uint64 placement_epoch = 2; // Placement epoch for ordering; receiver ignores old epochs
+}
+
+// VNodeTransferResp streams snapshot entries from primary to replica.
+// Large snapshots are chunked into multiple responses; receiver reassembles.
+message VNodeTransferResp {
+    uint32 vnode_id = 1;        // Echo of requested vnode ID
+    uint64 placement_epoch = 2; // Replicate of request epoch
+    
+    // Snapshot entry: one (key, value, version) per response message.
+    // End-of-stream indicated by empty_entries=true.
+    string key = 3;
+    bytes value = 4;
+    uint64 version = 5;          // Write version for conflict detection during merge
+    
+    bool empty_entries = 6;      // true = end-of-stream for this vnode; no more entries
+    string error = 7;            // Set on error; receiver should abort transfer
+    bool tombstone = 8;          // true if entry is a delete marker
+}
+
 

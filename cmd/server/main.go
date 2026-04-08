@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -81,7 +82,7 @@ func main() {
 	}
 	go eventLoop.Run()
 
-	server := core.NewServer(reqCh)
+	server := core.NewServer(reqCh, store)
 	nodeID := fmt.Sprintf("node-%d", *rpc_port)
 	resolvedRaftPort := *raftPort
 	if resolvedRaftPort == 0 {
@@ -112,6 +113,39 @@ func main() {
 		panic(err)
 	}
 	replicator := cluster.NewReplicator(nodeID, Node.Ml, *replicationFactor)
+	replicator.SetTransferApplier(func(cmd core.Command) error {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		resp := server.SendInternal(ctx, core.Request{
+			Op:           cmd.Op,
+			Key:          cmd.Key,
+			Value:        cmd.Value,
+			VNodeID:      cmd.VNodeID,
+			Version:      cmd.Version,
+			ResponseChan: make(chan core.Response, 1),
+		})
+		return resp.Err
+	})
+	replicator.SetTransferDropper(func(vnodeID uint16) error {
+		keys := store.GetKeysForVNode(vnodeID)
+		for _, key := range keys {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			resp := server.SendInternal(ctx, core.Request{
+				Op:           core.OpDelete,
+				Key:          key,
+				VNodeID:      vnodeID,
+				Version:      server.NextVersion(),
+				ResponseChan: make(chan core.Response, 1),
+			})
+			cancel()
+			if resp.Err != nil {
+				return resp.Err
+			}
+		}
+		store.DeleteVNodeData(vnodeID)
+		return nil
+	})
 	raftDataDir := filepath.Join(baseDir, resolvedWalDir, "raft")
 	rn, err := cluster.NewRaftNode(
 		nodeID,
@@ -142,6 +176,7 @@ func main() {
 	defer Node.StopMembershipWorkers()
 
 	if *rpc_port != 9999 {
+		time.Sleep(1 * time.Second)
 		if err := Node.JoinCluster(*seedGossipAddr); err != nil {
 			panic(err)
 		}

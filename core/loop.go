@@ -23,10 +23,16 @@ const (
 	OpDelete
 )
 
+// Command represents a state-changing operation with full context for vnode-aware storage.
+// VNodeID: indicates which vnode owns this key (computed from key hash at RPC layer).
+// Version: logical timestamp for conflict detection during concurrent replication.
+// Enables fast enumeration of owned keys per vnode and version-based reconciliation.
 type Command struct {
-	Op    OpType
-	Key   string
-	Value []byte
+	Op      OpType
+	Key     string
+	Value   []byte
+	VNodeID uint16 // Vnode owner (0..1023); computed from hash(key)
+	Version uint64 // Logical version for conflict resolution; increments per write
 }
 
 const batchSize = 512
@@ -60,7 +66,15 @@ func (el *EventLoop) Run() {
 
 		cmds := make([]Command, len(writeBatch))
 		for i, r := range writeBatch {
-			cmds[i] = Command{Op: r.Op, Key: r.Key, Value: r.Value}
+			// Build command with vnode and version from request.
+			// Vnode was computed by RPC layer; version was incremented at Put/Delete time.
+			cmds[i] = Command{
+				Op:      r.Op,
+				Key:     r.Key,
+				Value:   r.Value,
+				VNodeID: r.VNodeID,
+				Version: r.Version,
+			}
 			el.Store.Apply(cmds[i])
 		}
 
@@ -87,9 +101,15 @@ func (el *EventLoop) Run() {
 				// BLOCKING send for GET requests
 				req.ResponseChan <- Response{Op: req.Op, Value: val, Err: err}
 			} else {
-				// Fast-path bypass for AckAfterEnqueue
+				// Fast-path bypass for AckAfterEnqueue: immediately apply and ACK without batching.
 				if el.Wal.ackMode == AckAfterEnqueue {
-					cmd := Command{Op: req.Op, Key: req.Key, Value: req.Value}
+					cmd := Command{
+						Op:      req.Op,
+						Key:     req.Key,
+						Value:   req.Value,
+						VNodeID: req.VNodeID,
+						Version: req.Version,
+					}
 					el.Wal.Append([]Command{cmd})
 					err := el.Store.Apply(cmd)
 

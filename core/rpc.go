@@ -11,6 +11,7 @@ import (
 	"os/signal"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -23,21 +24,27 @@ import (
 )
 
 type Replicator interface {
-	ReplicateToAll(ctx context.Context, op pb.Op, key string, value []byte) error
+	ReplicateToAll(ctx context.Context, op pb.Op, key string, value []byte, vnodeID uint16, version uint64) error
 	CheckOwnership(key string) (bool, bool, string)
 	ForwardToOwner(ctx context.Context, owner string, req any) ([]byte, error)
+	GetVNodeForKey(key string) uint16 // Returns vnode ID for a key; used to annotate commands
+	GetMigrationSourceForKey(key string) string
 }
 
 type Server struct {
 	pb.UnimplementedKVServer
-	reqCh      chan<- Request
-	Replicator Replicator
+	reqCh          chan<- Request
+	Replicator     Replicator
+	Store          *Store        // Store reference for snapshots during vnode transfer
+	versionCounter atomic.Uint64 // Atomic counter for logical versioning; increments on each write
 }
 
 type Request struct {
 	Op           OpType
 	Key          string
 	Value        []byte
+	VNodeID      uint16 // Vnode owner for this key; computed by Server before sending
+	Version      uint64 // Logical version for conflict resolution; incremented per write
 	ResponseChan chan Response
 }
 
@@ -47,9 +54,10 @@ type Response struct {
 	Err   error
 }
 
-func NewServer(reqCh chan<- Request) *Server {
+func NewServer(reqCh chan<- Request, store *Store) *Server {
 	return &Server{
 		reqCh: reqCh,
+		Store: store,
 	}
 }
 
@@ -92,6 +100,25 @@ func (s *Server) sendRequest(ctx context.Context, req Request) Response {
 	}
 }
 
+// SendInternal allows trusted internal components (e.g., migration applier)
+// to reuse the same EventLoop request path as gRPC requests.
+func (s *Server) SendInternal(ctx context.Context, req Request) Response {
+	return s.sendRequest(ctx, req)
+}
+
+func (s *Server) NextVersion() uint64 {
+	for {
+		cur := s.versionCounter.Load()
+		cand := uint64(time.Now().UnixNano())
+		if cand <= cur {
+			cand = cur + 1
+		}
+		if s.versionCounter.CompareAndSwap(cur, cand) {
+			return cand
+		}
+	}
+}
+
 // gRPC Put RPC
 func (s *Server) Put(ctx context.Context, req *pb.PutRequest) (*emptypb.Empty, error) {
 	log.Printf("[rpc] PUT request key=%q bytes=%d", req.Key, len(req.Value))
@@ -104,10 +131,17 @@ func (s *Server) Put(ctx context.Context, req *pb.PutRequest) (*emptypb.Empty, e
 		log.Printf("[rpc] PUT key=%q forwarded to owner=%s", req.Key, owner)
 		return &emptypb.Empty{}, nil
 	} else {
+		// Compute vnode and version before sending request to EventLoop.
+		// Vnode is deterministic from key hash; version increments per write.
+		vnodeID := s.Replicator.GetVNodeForKey(req.Key)
+		version := s.NextVersion()
+
 		resp := s.sendRequest(ctx, Request{
 			Op:           OpPut,
 			Key:          req.Key,
 			Value:        req.Value,
+			VNodeID:      vnodeID,
+			Version:      version,
 			ResponseChan: make(chan Response, 1),
 		})
 		if resp.Err != nil {
@@ -116,7 +150,7 @@ func (s *Server) Put(ctx context.Context, req *pb.PutRequest) (*emptypb.Empty, e
 		log.Printf("[rpc] PUT key=%q applied locally", req.Key)
 		if s.Replicator != nil {
 			repCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-			if err := s.Replicator.ReplicateToAll(repCtx, pb.Op_PUT, req.Key, req.Value); err != nil {
+			if err := s.Replicator.ReplicateToAll(repCtx, pb.Op_PUT, req.Key, req.Value, vnodeID, version); err != nil {
 				cancel()
 				return nil, status.Errorf(codes.Internal, "Failed to replicate PUT: %v", err)
 			}
@@ -141,6 +175,13 @@ func (s *Server) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, 
 		})
 		if resp.Err != nil {
 			if errors.Is(resp.Err, ErrKeyNotFound) {
+				if src := s.Replicator.GetMigrationSourceForKey(req.Key); src != "" {
+					val, err := s.Replicator.ForwardToOwner(ctx, src, req)
+					if err == nil {
+						log.Printf("[rpc] GET key=%q miss during migration; forwarded to source=%s", req.Key, src)
+						return &pb.GetResponse{Value: val}, nil
+					}
+				}
 				if owner != "" {
 					// we're a replica but don't have the key locally.
 					val, err := s.Replicator.ForwardToOwner(ctx, owner, req)
@@ -178,9 +219,15 @@ func (s *Server) Delete(ctx context.Context, req *pb.DeleteRequest) (*emptypb.Em
 		log.Printf("[rpc] DELETE key=%q forwarded to owner=%s", req.Key, owner)
 		return &emptypb.Empty{}, nil
 	} else {
+		// Compute vnode and version before sending request to EventLoop.
+		vnodeID := s.Replicator.GetVNodeForKey(req.Key)
+		version := s.NextVersion()
+
 		resp := s.sendRequest(ctx, Request{
 			Op:           OpDelete,
 			Key:          req.Key,
+			VNodeID:      vnodeID,
+			Version:      version,
 			ResponseChan: make(chan Response, 1),
 		})
 		if resp.Err != nil {
@@ -190,7 +237,7 @@ func (s *Server) Delete(ctx context.Context, req *pb.DeleteRequest) (*emptypb.Em
 		if s.Replicator != nil {
 
 			repCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-			if err := s.Replicator.ReplicateToAll(repCtx, pb.Op_DELETE, req.Key, nil); err != nil {
+			if err := s.Replicator.ReplicateToAll(repCtx, pb.Op_DELETE, req.Key, nil, vnodeID, version); err != nil {
 				cancel()
 				return nil, status.Errorf(codes.Internal, "Failed to REPLICATE DELETE: %v", err)
 			}
@@ -215,9 +262,21 @@ func (s *Server) Replicate(ctx context.Context, req *pb.ReplicationRequest) (*em
 	}
 
 	resp := s.sendRequest(ctx, Request{
-		Op:           op,
-		Key:          req.Key,
-		Value:        req.Value,
+		Op:    op,
+		Key:   req.Key,
+		Value: req.Value,
+		VNodeID: func() uint16 {
+			if req.VnodeId != 0 {
+				return uint16(req.VnodeId)
+			}
+			return s.Replicator.GetVNodeForKey(req.Key)
+		}(),
+		Version: func() uint64 {
+			if req.Version != 0 {
+				return req.Version
+			}
+			return s.NextVersion()
+		}(),
 		ResponseChan: make(chan Response, 1),
 	})
 	if resp.Err != nil {
@@ -305,10 +364,17 @@ func (s *Server) StreamKV(stream pb.KV_StreamKVServer) error {
 		inFlight.Add(1)
 
 		// Send to EventLoop
+		vnodeID := s.Replicator.GetVNodeForKey(req.Key)
+		version := uint64(0)
+		if coreOp == OpPut || coreOp == OpDelete {
+			version = s.NextVersion()
+		}
 		s.reqCh <- Request{
 			Op:           coreOp,
 			Key:          req.Key,
 			Value:        req.Value,
+			VNodeID:      vnodeID,
+			Version:      version,
 			ResponseChan: respCh,
 		}
 	}
@@ -338,4 +404,55 @@ func (s *Server) StreamKV(stream pb.KV_StreamKVServer) error {
 		}
 		return ctx.Err()
 	}
+}
+
+// TransferVNode streams a snapshot of all key-value pairs owned by a vnode.
+// Client initiates transfer; server responds with all entries for that vnode.
+// Used during placement migration: receiving node applies snapshot to catch up.
+// Receiver reconstructs vnode index on apply; sender includes version for conflict detection.
+func (s *Server) TransferVNode(stream pb.KV_TransferVNodeServer) error {
+	// Receive first request with vnode ID and placement epoch
+	req, err := stream.Recv()
+	if err != nil {
+		return status.Errorf(codes.Internal, "Failed to receive transfer request: %v", err)
+	}
+
+	vnodeID := uint16(req.VnodeId)
+	epoch := req.PlacementEpoch
+
+	log.Printf("[transfer] starting vnode=%d snapshot (epoch=%d)", vnodeID, epoch)
+
+	// Snapshot all keys owned by this vnode
+	snapshot := s.Store.SnapshotVNode(vnodeID)
+
+	// Stream back each entry as a separate response
+	for _, entry := range snapshot.Entries {
+		err := stream.Send(&pb.VNodeTransferResp{
+			VnodeId:        uint32(vnodeID),
+			PlacementEpoch: epoch,
+			Key:            entry.Key,
+			Value:          entry.Value,
+			Version:        entry.Version,
+			EmptyEntries:   false,
+			Error:          "",
+			Tombstone:      entry.Tombstone,
+		})
+		if err != nil {
+			log.Printf("[transfer] failed to send entry for vnode=%d key=%q: %v", vnodeID, entry.Key, err)
+			return status.Errorf(codes.Internal, "Failed to send snapshot entry: %v", err)
+		}
+	}
+
+	// Send end-of-stream marker
+	err = stream.Send(&pb.VNodeTransferResp{
+		VnodeId:        uint32(vnodeID),
+		PlacementEpoch: epoch,
+		EmptyEntries:   true,
+	})
+	if err != nil {
+		return status.Errorf(codes.Internal, "Failed to send end-of-stream: %v", err)
+	}
+
+	log.Printf("[transfer] completed vnode=%d snapshot (%d entries)", vnodeID, len(snapshot.Entries))
+	return nil
 }
