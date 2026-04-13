@@ -39,3 +39,18 @@ Tuning tips
 - Theoretical per-node NIC capacity used by scoring is BANDWIDTH_MBPS.
 - Pairwise path constraints are set by TC_RULES.
 - For harsher effects, reduce rate and increase delay per path.
+
+Realistic local-LAN profile (recommended for perf + realism)
+- Run with the override file:
+  docker compose -f docker-compose.yml -f docker-compose.real.yml up -d --build
+- What this profile does:
+  - Keeps RF=3 and quorum semantics.
+  - Enables tc with low-latency, high-bandwidth LAN-like links (sub-ms delays, multi-gigabit rates).
+  - Slows metrics/placement polling pressure (10s interval) to reduce epoch churn from host-noise.
+  - Applies per-container CPU and memory limits to reduce scheduler interference and simulate isolated nodes.
+
+Durability mode
+- ACK is now passed through start-node.sh to kvserver:
+  - ACK=0: ack after enqueue (fastest, weakest)
+  - ACK=1: ack after flush (balanced default)
+  - ACK=2: ack after fsync (strongest durability, slower)

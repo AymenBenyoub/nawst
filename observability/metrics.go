@@ -136,6 +136,11 @@ var (
 		Help: "RPC requests by method and result.",
 	}, []string{"method", "result"})
 
+	clientRequestsTotal = promauto.NewCounterVec(prometheus.CounterOpts{
+		Name: "nawst_client_requests_total",
+		Help: "Ingress client requests by method and end-to-end result (counted once per external request).",
+	}, []string{"method", "result"})
+
 	rpcDurationSeconds = promauto.NewHistogramVec(prometheus.HistogramOpts{
 		Name:    "nawst_rpc_request_duration_seconds",
 		Help:    "RPC method latency by method.",
@@ -296,6 +301,16 @@ func ObserveRPC(method, result string, d time.Duration) {
 	}
 	rpcRequestsTotal.WithLabelValues(method, result).Inc()
 	rpcDurationSeconds.WithLabelValues(method).Observe(d.Seconds())
+}
+
+func ObserveClientRequest(method, result string) {
+	if method == "" {
+		method = "unknown"
+	}
+	if result == "" {
+		result = "unknown"
+	}
+	clientRequestsTotal.WithLabelValues(method, result).Inc()
 }
 
 func ObserveReplicationQuorum(result string, acks, targets int) {

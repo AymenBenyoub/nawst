@@ -35,6 +35,7 @@ func main() {
 
 	var walDir = flag.String("wal-dir", "", "directory for WAL files (default: kvst/node-<rpc-port>)")
 	var replicationFactor = flag.Int("rf", 3, "replication factor for the cluster")
+	var rpcVerbose = flag.Bool("rpc-verbose", false, "enable verbose per-request rpc/replication logging")
 	var metricsBindAddr = flag.String("metrics-bind-addr", "0.0.0.0", "metrics http bind address")
 	var metricsPort = flag.Int("metrics-port", 0, "metrics http port (default rpc-port+2000)")
 	flag.Parse()
@@ -86,6 +87,7 @@ func main() {
 	go eventLoop.Run()
 
 	server := core.NewServer(reqCh, store)
+	server.SetRPCVerbose(*rpcVerbose)
 	resolvedMetricsPort := *metricsPort
 	if resolvedMetricsPort == 0 {
 		resolvedMetricsPort = *rpc_port + 2000
@@ -122,6 +124,7 @@ func main() {
 		panic(err)
 	}
 	replicator := cluster.NewReplicator(nodeID, Node.Ml, *replicationFactor)
+	replicator.SetVerbose(*rpcVerbose)
 	replicator.SetTransferApplier(func(cmd core.Command) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

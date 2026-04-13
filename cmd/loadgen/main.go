@@ -9,6 +9,7 @@ import (
 	"math/rand"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"google.golang.org/grpc"
@@ -333,6 +334,8 @@ func prefill(cfg LoadConfig, clients []proto.KVClient) {
 		return
 	}
 	start := time.Now()
+	var okCount uint64
+	var failCount uint64
 	workers := cfg.Clients
 	if workers > cfg.PrefillKeys {
 		workers = cfg.PrefillKeys
@@ -350,13 +353,26 @@ func prefill(cfg LoadConfig, clients []proto.KVClient) {
 			v := randomValue(r, cfg.ValueSize)
 			for k := id; k < cfg.PrefillKeys; k += workers {
 				ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
-				_, _ = clients[id%len(clients)].Put(ctx, &proto.PutRequest{Key: fmt.Sprintf("k%08d", k%cfg.Keyspace), Value: v})
+				_, err := clients[id%len(clients)].Put(ctx, &proto.PutRequest{Key: fmt.Sprintf("k%08d", k%cfg.Keyspace), Value: v})
 				cancel()
+				if err != nil {
+					atomic.AddUint64(&failCount, 1)
+					continue
+				}
+				atomic.AddUint64(&okCount, 1)
 			}
 		}(wid)
 	}
 	wg.Wait()
-	fmt.Printf("[prefill] completed %d keys in %s\n", cfg.PrefillKeys, time.Since(start))
+	elapsed := time.Since(start)
+	ops := float64(atomic.LoadUint64(&okCount)) / max(elapsed.Seconds(), 1e-9)
+	fmt.Printf("[prefill] requested=%d ok=%d fail=%d elapsed=%s throughput=%.2f ops/s\n",
+		cfg.PrefillKeys,
+		atomic.LoadUint64(&okCount),
+		atomic.LoadUint64(&failCount),
+		elapsed,
+		ops,
+	)
 }
 
 func max(a, b float64) float64 {

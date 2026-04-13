@@ -21,6 +21,7 @@ import (
 	"github.com/hashicorp/raft"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -28,6 +29,8 @@ type Replicator struct {
 	ID string
 	Ml *memberlist.Memberlist
 	Rf *RaftNode
+
+	verbose bool
 
 	mu    sync.RWMutex
 	peers map[string]pb.KVClient
@@ -85,6 +88,22 @@ func NewReplicator(id string, ml *memberlist.Memberlist, rf int) *Replicator {
 
 func (r *Replicator) SetRaft(rfNode *RaftNode) {
 	r.Rf = rfNode
+}
+
+func (r *Replicator) SetVerbose(enabled bool) {
+	r.mu.Lock()
+	r.verbose = enabled
+	r.mu.Unlock()
+}
+
+func (r *Replicator) debugf(format string, args ...any) {
+	r.mu.RLock()
+	enabled := r.verbose
+	r.mu.RUnlock()
+	if !enabled {
+		return
+	}
+	log.Printf(format, args...)
 }
 
 // SetTransferApplier sets the function used to apply transferred vnode entries locally.
@@ -202,8 +221,8 @@ func (r *Replicator) StartMetricsReporter(interval time.Duration) {
 	}
 
 	publishTicker := time.NewTicker(interval)
-	shortEvalTicker := time.NewTicker(3 * interval)
-	longEvalTicker := time.NewTicker(9 * interval)
+	shortEvalTicker := time.NewTicker(6 * interval)
+	longEvalTicker := time.NewTicker(24 * interval)
 	go func() {
 		defer publishTicker.Stop()
 		defer shortEvalTicker.Stop()
@@ -1107,7 +1126,7 @@ func (r *Replicator) ReplicateToAll(ctx context.Context, op pb.Op, key string, v
 		}
 
 		_, replicas := pl.GetNodesForKey(key)
-		log.Printf("[replicator] key=%q routes to replicas: %v", key, replicas)
+		r.debugf("[replicator] key=%q routes to replicas: %v", key, replicas)
 		seen := make(map[string]struct{})
 		for _, replicaID := range replicas {
 			if replicaID == "" || replicaID == r.ID {
@@ -1156,8 +1175,6 @@ func (r *Replicator) ReplicateToAll(ctx context.Context, op pb.Op, key string, v
 		report("local_only", 0)
 		return nil
 	}
-	observability.ObserveReplicationQuorum("targets_selected", acks, len(targets))
-
 	remaining := len(targets)
 	if acks+remaining < required {
 		if firstErr != nil {
@@ -1193,23 +1210,22 @@ func (r *Replicator) ReplicateToAll(ctx context.Context, op pb.Op, key string, v
 				Version: version,
 			}
 
-			log.Printf("[replicator] sending replication request to %s: op=%v key=%q", pid, op, key)
 			_, err := c.Replicate(cctx, req)
 			if err == nil {
-				log.Printf("[replicator] replication to %s succeeded: key=%q", pid, key)
+				r.debugf("[replicator] replication to %s succeeded: key=%q", pid, key)
 				resultCh <- nil
 				return
 			}
 
-			log.Printf("[replicator] replication to %s failed (will retry): key=%q error=%v", pid, key, err)
+			r.debugf("[replicator] replication to %s failed (will retry): key=%q error=%v", pid, key, err)
 			retryErr := retryReplication(pid, c, req, cctx)
 			if retryErr != nil {
-				log.Printf("[replicator] replication to %s failed after retries: key=%q", pid, key)
+				r.debugf("[replicator] replication to %s failed after retries: key=%q", pid, key)
 				resultCh <- fmt.Errorf("replicate to %s failed after retries: %w", pid, retryErr)
 				return
 			}
 
-			log.Printf("[replicator] replication to %s succeeded after retries: key=%q", pid, key)
+			r.debugf("[replicator] replication to %s succeeded after retries: key=%q", pid, key)
 			resultCh <- nil
 		}(t.id, t.client)
 	}
@@ -1531,20 +1547,21 @@ func (r *Replicator) ForwardToOwner(ctx context.Context, owner string, req any) 
 	if err != nil {
 		return nil, err
 	}
+	fwdCtx := metadata.AppendToOutgoingContext(ctx, core.ForwardedMetadataKey, "1")
 	switch req := req.(type) {
 	case *pb.PutRequest:
-		_, err := client.Put(ctx, req)
+		_, err := client.Put(fwdCtx, req)
 		if err != nil {
 			return nil, err
 		}
 
 	case *pb.DeleteRequest:
-		_, err := client.Delete(ctx, req)
+		_, err := client.Delete(fwdCtx, req)
 		if err != nil {
 			return nil, err
 		}
 	case *pb.GetRequest:
-		resp, err := client.Get(ctx, req)
+		resp, err := client.Get(fwdCtx, req)
 		if err != nil {
 			return nil, err
 		}

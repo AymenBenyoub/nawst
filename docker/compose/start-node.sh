@@ -12,7 +12,8 @@ METRICS_INTERVAL="${METRICS_INTERVAL:-4s}"
 METRICS_BIND_ADDR="${METRICS_BIND_ADDR:-0.0.0.0}"
 METRICS_PORT="${METRICS_PORT:-$((RPC_PORT + 2000))}"
 RF="${RF:-3}"
-ENABLE_TC="${ENABLE_TC:-1}"
+ACK="${ACK:-1}"
+ENABLE_TC="${ENABLE_TC:-0}"
 DISK_PATH="${DISK_PATH:-/data}"
 
 if [[ ! -x /workspace/kvserver ]]; then
@@ -80,7 +81,7 @@ if [[ "${RPC_PORT}" != "9999" ]]; then
 fi
 
 echo "[boot] starting node-${RPC_PORT} (${NODE_IP})"
-echo "[boot] flags: rpc-port=${RPC_PORT} rpc-host=${NODE_IP} gossip-bind=${NODE_IP} gossip-port=${GOSSIP_PORT} gossip-adv=${NODE_IP} seed=${SEED_GOSSIP_ADDR} raft-bind=${RAFT_BIND_ADDR} raft-adv=${RAFT_ADVERTISE_IP} rf=${RF} bandwidth-mbps=${BANDWIDTH_MBPS} metrics-interval=${METRICS_INTERVAL} metrics-bind-addr=${METRICS_BIND_ADDR} metrics-port=${METRICS_PORT} disk-path=${DISK_PATH}"
+echo "[boot] flags: rpc-port=${RPC_PORT} rpc-host=${NODE_IP} gossip-bind=${NODE_IP} gossip-port=${GOSSIP_PORT} gossip-adv=${NODE_IP} seed=${SEED_GOSSIP_ADDR} raft-bind=${RAFT_BIND_ADDR} raft-adv=${RAFT_ADVERTISE_IP} rf=${RF} ack=${ACK} bandwidth-mbps=${BANDWIDTH_MBPS} metrics-interval=${METRICS_INTERVAL} metrics-bind-addr=${METRICS_BIND_ADDR} metrics-port=${METRICS_PORT} disk-path=${DISK_PATH}"
 exec /workspace/kvserver \
   -rpc-port "${RPC_PORT}" \
   -rpc-host "${NODE_IP}" \
@@ -95,5 +96,6 @@ exec /workspace/kvserver \
   -metrics-interval "${METRICS_INTERVAL}" \
   -metrics-bind-addr "${METRICS_BIND_ADDR}" \
   -metrics-port "${METRICS_PORT}" \
+  -ack "${ACK}" \
   -rf "${RF}" \
   -wal-dir "${DATA_DIR}/wal"

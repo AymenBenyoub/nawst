@@ -63,7 +63,11 @@
         "graphMode": "none",
         "justifyMode": "center",
         "orientation": "horizontal",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
         "textMode": "auto"
       },
       "fieldConfig": {
@@ -90,7 +94,11 @@
         "graphMode": "none",
         "justifyMode": "center",
         "orientation": "horizontal",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
         "textMode": "auto"
       },
       "fieldConfig": {
@@ -117,7 +125,11 @@
         "graphMode": "none",
         "justifyMode": "center",
         "orientation": "horizontal",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
         "textMode": "auto"
       },
       "fieldConfig": {
@@ -135,7 +147,7 @@
       "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
       "targets": [
         {
-          "expr": "sum(rate(nawst_rpc_requests_total{instance=~\"$instance\",method=~\"put|get|delete\"}[1m]))",
+          "expr": "sum(rate(nawst_client_requests_total{instance=~\"$instance\",method=~\"put|get|delete\",result=\"ok\"}[1m]))",
           "refId": "A"
         }
       ],
@@ -144,7 +156,11 @@
         "graphMode": "none",
         "justifyMode": "center",
         "orientation": "horizontal",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
         "textMode": "auto"
       },
       "fieldConfig": {
@@ -162,7 +178,7 @@
       "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
       "targets": [
         {
-          "expr": "100 * sum(rate(nawst_replication_quorum_total{instance=~\"$instance\",result=\"ok\"}[5m])) / clamp_min(sum(rate(nawst_replication_quorum_total{instance=~\"$instance\"}[5m])), 0.0001)",
+          "expr": "100 * sum(rate(nawst_replication_quorum_total{instance=~\"$instance\",result=\"ok\"}[5m])) / clamp_min(sum(rate(nawst_replication_quorum_total{instance=~\"$instance\",result=~\"ok|quorum_not_reached|quorum_impossible|placement_not_ready|local_only\"}[5m])), 0.0001)",
           "refId": "A"
         }
       ],
@@ -171,7 +187,11 @@
         "graphMode": "none",
         "justifyMode": "center",
         "orientation": "horizontal",
-        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "reduceOptions": {
+          "calcs": ["lastNotNull"],
+          "fields": "",
+          "values": false
+        },
         "textMode": "auto"
       },
       "fieldConfig": {
@@ -184,12 +204,12 @@
     },
     {
       "type": "timeseries",
-      "title": "Throughput by Method (ops/s)",
+      "title": "Client Success Throughput by Method (ops/s)",
       "datasource": "Prometheus",
       "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
       "targets": [
         {
-          "expr": "sum by (method) (rate(nawst_rpc_requests_total{instance=~\"$instance\"}[1m]))",
+          "expr": "sum by (method) (rate(nawst_client_requests_total{instance=~\"$instance\",method=~\"put|get|delete\",result=\"ok\"}[1m]))",
           "legendFormat": "{{method}}",
           "refId": "A"
         }
@@ -202,18 +222,22 @@
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean", "max"] },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull", "mean", "max"]
+        },
         "tooltip": { "mode": "multi", "sort": "desc" }
       }
     },
     {
       "type": "timeseries",
-      "title": "RPC Result Rate by Outcome (ops/s)",
+      "title": "Client Result Rate by Outcome (ops/s)",
       "datasource": "Prometheus",
       "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
       "targets": [
         {
-          "expr": "sum by (result) (rate(nawst_rpc_requests_total{instance=~\"$instance\",method=~\"put|get|delete\"}[1m]))",
+          "expr": "sum by (result) (rate(nawst_client_requests_total{instance=~\"$instance\",method=~\"put|get|delete\"}[1m]))",
           "legendFormat": "{{result}}",
           "refId": "A"
         }
@@ -226,7 +250,11 @@
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean", "max"] },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull", "mean", "max"]
+        },
         "tooltip": { "mode": "multi", "sort": "desc" }
       }
     },
@@ -260,7 +288,11 @@
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean", "max"] },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull", "mean", "max"]
+        },
         "tooltip": { "mode": "multi", "sort": "none" }
       }
     },
@@ -284,7 +316,11 @@
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean", "max"] },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull", "mean", "max"]
+        },
         "tooltip": { "mode": "multi", "sort": "desc" }
       }
     },
@@ -308,7 +344,11 @@
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean", "max"] },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull", "mean", "max"]
+        },
         "tooltip": { "mode": "multi", "sort": "desc" }
       }
     },
@@ -337,7 +377,11 @@
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean", "max"] },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull", "mean", "max"]
+        },
         "tooltip": { "mode": "multi", "sort": "none" }
       }
     },
@@ -366,7 +410,11 @@
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean", "max"] },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull", "mean", "max"]
+        },
         "tooltip": { "mode": "multi", "sort": "none" }
       }
     },
@@ -390,7 +438,11 @@
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull"]
+        },
         "tooltip": { "mode": "multi", "sort": "none" }
       }
     },
@@ -429,7 +481,11 @@
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean", "max"] },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull", "mean", "max"]
+        },
         "tooltip": { "mode": "multi", "sort": "none" }
       }
     },
@@ -457,7 +513,11 @@
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean", "max"] },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull", "mean", "max"]
+        },
         "tooltip": { "mode": "multi", "sort": "none" }
       }
     },
@@ -490,7 +550,11 @@
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean", "max"] },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull", "mean", "max"]
+        },
         "tooltip": { "mode": "multi", "sort": "none" }
       }
     },
@@ -519,7 +583,11 @@
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean", "max"] },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull", "mean", "max"]
+        },
         "tooltip": { "mode": "multi", "sort": "none" }
       }
     },
@@ -543,7 +611,11 @@
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean", "max"] },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull", "mean", "max"]
+        },
         "tooltip": { "mode": "multi", "sort": "desc" }
       }
     },
@@ -571,7 +643,11 @@
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean", "max"] },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull", "mean", "max"]
+        },
         "tooltip": { "mode": "multi", "sort": "none" }
       }
     },
@@ -604,7 +680,11 @@
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean", "max"] },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull", "mean", "max"]
+        },
         "tooltip": { "mode": "multi", "sort": "none" }
       }
     },
@@ -643,7 +723,11 @@
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean", "max"] },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull", "mean", "max"]
+        },
         "tooltip": { "mode": "multi", "sort": "none" }
       }
     },
@@ -667,7 +751,11 @@
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean", "max"] },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull", "mean", "max"]
+        },
         "tooltip": { "mode": "multi", "sort": "none" }
       }
     },
@@ -705,7 +793,11 @@
         "overrides": []
       },
       "options": {
-        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] },
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom",
+          "calcs": ["lastNotNull"]
+        },
         "tooltip": { "mode": "multi", "sort": "none" }
       }
     }
