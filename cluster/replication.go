@@ -16,6 +16,7 @@ import (
 
 	"github.com/AymenBenyoub/nawst/core"
 	pb "github.com/AymenBenyoub/nawst/core/proto"
+	"github.com/AymenBenyoub/nawst/observability"
 	"github.com/hashicorp/memberlist"
 	"github.com/hashicorp/raft"
 	"google.golang.org/grpc"
@@ -258,6 +259,22 @@ func (r *Replicator) publishLocalMetrics() {
 
 	m := collector.GetCurrentMetrics()
 	rtt := collector.SnapshotRTT()
+	observability.ObserveLocalCapacity(
+		m.CPUUsage,
+		m.MemUsage,
+		m.NetUsage,
+		m.DiskUsage,
+		m.AvgRTT,
+		m.CPUCores,
+		m.MemGB,
+		m.BandwidthMbps,
+		m.DiskGB,
+	)
+	if r.Ml != nil {
+		observability.SetClusterMembers(len(r.Ml.Members()))
+	} else {
+		observability.SetClusterMembers(1)
+	}
 
 	msg := &GossipMetricsMessage{
 		Type:    "metrics",
@@ -568,6 +585,7 @@ func (r *Replicator) ApplyPlacementFromRaft(p *Placement) {
 	if p == nil {
 		return
 	}
+	startedAt := time.Now()
 
 	// Compare old placement to new to detect changes
 	oldPl := r.getPlacement()
@@ -636,11 +654,13 @@ func (r *Replicator) ApplyPlacementFromRaft(p *Placement) {
 
 	log.Printf("[placement-raft] epoch=%d->%d: gained=%d lost=%d primary-replica-changes=%d new-replicas=%d",
 		oldPl.Epoch, p.Epoch, len(gainedVNodes), len(lostVNodes), len(changedReplicas), len(addedReplicaVNodes))
+	observability.ObservePlacementApply(p.Epoch, len(gainedVNodes), len(lostVNodes), len(changedReplicas), len(addedReplicaVNodes), time.Since(startedAt))
 
 	// Start async migration goroutines (non-blocking return)
 	go func() {
 		// 1. Gain vnodes from old primary (or replicas if primary is down)
 		for _, vnodeID := range gainedVNodes {
+			observability.IncMigrationActive()
 			oldOwner := oldMap[vnodeID]
 			candidates := make([]string, 0, 1+len(oldPl.VNodes[vnodeID].Replicas)+len(p.VNodes[vnodeID].Replicas))
 			if oldOwner != "" && oldOwner != r.ID {
@@ -678,10 +698,12 @@ func (r *Replicator) ApplyPlacementFromRaft(p *Placement) {
 			} else {
 				r.clearMigrationSource(vnodeID)
 			}
+			observability.DecMigrationActive()
 		}
 
 		// 1b. Newly-added replicas must catch up from primary/other replicas.
 		for _, vnodeID := range addedReplicaVNodes {
+			observability.IncMigrationActive()
 			owner := newMap[vnodeID]
 			candidates := make([]string, 0, 1+len(p.VNodes[vnodeID].Replicas))
 			if owner != "" && owner != r.ID {
@@ -708,6 +730,7 @@ func (r *Replicator) ApplyPlacementFromRaft(p *Placement) {
 			} else {
 				log.Printf("[migration] caught up new replica vnode=%d", vnodeID)
 			}
+			observability.DecMigrationActive()
 		}
 
 		// 2. Delete lost vnodes after grace period.
@@ -1056,11 +1079,15 @@ func (r *Replicator) ReplicateToAll(ctx context.Context, op pb.Op, key string, v
 
 	// local primary write already succeeded before this function is called
 	acks := 1
+	report := func(result string, targets int) {
+		observability.ObserveReplicationQuorum(result, acks, targets)
+	}
 
 	effectiveRF := min(max(r.ReplicationFactor, 1), len(members))
 
 	required := effectiveRF/2 + 1
 	if acks >= required {
+		report("ok", 0)
 		return nil
 	}
 
@@ -1120,19 +1147,24 @@ func (r *Replicator) ReplicateToAll(ctx context.Context, op pb.Op, key string, v
 		// Strict placement adherence: if we know there are other members but Raft hasn't
 		// given us a valid placement yet, return an error to force client retries instead
 		// of silently falling back to a local-only write or gossip-based random targets.
+		report("placement_not_ready", 0)
 		return fmt.Errorf("placement not ready: waiting for Raft placement sync")
 	}
 
 	if len(targets) == 0 {
 		log.Printf("[replicator] no placement targets for key=%q; keeping write local only", key)
+		report("local_only", 0)
 		return nil
 	}
+	observability.ObserveReplicationQuorum("targets_selected", acks, len(targets))
 
 	remaining := len(targets)
 	if acks+remaining < required {
 		if firstErr != nil {
+			report("quorum_impossible", len(targets))
 			return fmt.Errorf("quorum impossible: need %d acks, have %d local + %d remotes: %w", required, acks, remaining, firstErr)
 		}
+		report("quorum_impossible", len(targets))
 		return fmt.Errorf("quorum impossible: need %d acks, have %d local + %d remotes", required, acks, remaining)
 	}
 
@@ -1204,18 +1236,23 @@ func (r *Replicator) ReplicateToAll(ctx context.Context, op pb.Op, key string, v
 		if !quorumReached && acks+remaining < required {
 			cancel()
 			if firstErr != nil {
+				report("quorum_not_reached", len(targets))
 				return fmt.Errorf("write quorum not reached: got %d/%d acks: %w", acks, required, firstErr)
 			}
+			report("quorum_not_reached", len(targets))
 			return fmt.Errorf("write quorum not reached: got %d/%d acks", acks, required)
 		}
 	}
 
 	if quorumReached {
+		report("ok", len(targets))
 		return nil
 	}
 	if firstErr != nil {
+		report("quorum_not_reached", len(targets))
 		return fmt.Errorf("write quorum not reached: got %d/%d acks: %w", acks, required, firstErr)
 	}
+	report("quorum_not_reached", len(targets))
 	return fmt.Errorf("write quorum not reached: got %d/%d acks", acks, required)
 }
 
@@ -1292,6 +1329,14 @@ func (r *Replicator) GetVNodeForKey(key string) uint16 {
 // Conflict resolution: Each entry includes version; local store may drop older versions.
 // (TODO: Implement version-aware merge for concurrent writes during migration.)
 func (r *Replicator) transferVNodeFrom(sourceNodeID string, vnodeID uint16, epoch uint64) error {
+	startedAt := time.Now()
+	entriesReceived := 0
+	bytesReceived := 0
+	result := "failed"
+	defer func() {
+		observability.ObserveTransfer(result, time.Since(startedAt), entriesReceived, bytesReceived)
+	}()
+
 	applyFn := r.getTransferApplier()
 	if applyFn == nil {
 		return fmt.Errorf("transfer applier not configured")
@@ -1321,7 +1366,6 @@ func (r *Replicator) transferVNodeFrom(sourceNodeID string, vnodeID uint16, epoc
 	}
 
 	// Stream and apply entries
-	var entriesReceived int
 	for {
 		resp, err := stream.Recv()
 		if err == io.EOF {
@@ -1346,6 +1390,7 @@ func (r *Replicator) transferVNodeFrom(sourceNodeID string, vnodeID uint16, epoc
 		// Entries have key, value, version from snapshot.
 		// Apply to store with vnode context preserved.
 		entriesReceived++
+		bytesReceived += len(resp.Key) + len(resp.Value)
 
 		// TODO: For now, skipping version-aware merge. In production:
 		// - Compare resp.Version with local version for this key
@@ -1373,6 +1418,7 @@ func (r *Replicator) transferVNodeFrom(sourceNodeID string, vnodeID uint16, epoc
 	}
 
 	log.Printf("[transfer] applied %d entries for vnode=%d from %s", entriesReceived, vnodeID, sourceNodeID)
+	result = "success"
 	return nil
 }
 

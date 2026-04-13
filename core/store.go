@@ -3,6 +3,9 @@ package core
 import (
 	"slices"
 	"sync"
+	"time"
+
+	"github.com/AymenBenyoub/nawst/observability"
 )
 
 // Store holds all key-value data with vnode awareness.
@@ -28,6 +31,9 @@ type Store struct {
 
 	// meta stores per-key version/tombstone metadata used for conflict-safe migration.
 	meta map[string]keyMeta
+
+	tombstoneCount int
+	valueBytes     int64
 }
 
 type keyMeta struct {
@@ -44,6 +50,22 @@ func NewStore() *Store {
 	}
 }
 
+func (s *Store) updateStateMetricsLocked() {
+	vnodesWithData := 0
+	for _, set := range s.vNodeIdx {
+		if len(set) > 0 {
+			vnodesWithData++
+		}
+	}
+	vnodesWithTombstones := 0
+	for _, set := range s.tombstoneIdx {
+		if len(set) > 0 {
+			vnodesWithTombstones++
+		}
+	}
+	observability.SetStoreState(len(s.storage), s.tombstoneCount, s.valueBytes, vnodesWithData, vnodesWithTombstones)
+}
+
 // Apply executes a command and updates vnode index.
 // CRITICAL: Command must include VNodeID (computed from key hash at RPC layer before reaching here).
 func (s *Store) Apply(cmd Command) error {
@@ -56,13 +78,20 @@ func (s *Store) Apply(cmd Command) error {
 		cmd.Version = curMeta.Version + 1
 	} else if cmd.Version < curMeta.Version {
 		// Ignore stale writes to avoid overwriting newer data during migration/replay.
+		observability.IncStaleWriteIgnored()
+		observability.ObserveStoreApply("stale", "ignored")
 		return nil
 	}
 
 	switch cmd.Op {
 	case OpPut:
+		oldVal, hadOldVal := s.storage[cmd.Key]
 		// 1. Write value to global storage (fast, O(1)).
 		s.storage[cmd.Key] = slices.Clone(cmd.Value)
+		if hadOldVal {
+			s.valueBytes -= int64(len(oldVal))
+		}
+		s.valueBytes += int64(len(cmd.Value))
 
 		// 2. Register key in vnode index (fast, O(1) set insert).
 		if s.vNodeIdx[cmd.VNodeID] == nil {
@@ -72,11 +101,19 @@ func (s *Store) Apply(cmd Command) error {
 		if ts, ok := s.tombstoneIdx[cmd.VNodeID]; ok {
 			delete(ts, cmd.Key)
 		}
+		if curMeta.Tombstone {
+			s.tombstoneCount--
+		}
 		s.meta[cmd.Key] = keyMeta{Version: cmd.Version, Tombstone: false}
+		observability.ObserveStoreApply("put", "applied")
 
 	case OpDelete:
+		oldVal, hadOldVal := s.storage[cmd.Key]
 		// 1. Remove from global storage (fast, O(1)).
 		delete(s.storage, cmd.Key)
+		if hadOldVal {
+			s.valueBytes -= int64(len(oldVal))
+		}
 
 		// 2. Deregister from vnode index (fast, O(1) set delete).
 		if idx, ok := s.vNodeIdx[cmd.VNodeID]; ok {
@@ -86,25 +123,34 @@ func (s *Store) Apply(cmd Command) error {
 			s.tombstoneIdx[cmd.VNodeID] = make(map[string]bool)
 		}
 		s.tombstoneIdx[cmd.VNodeID][cmd.Key] = true
+		if !curMeta.Tombstone {
+			s.tombstoneCount++
+		}
 		s.meta[cmd.Key] = keyMeta{Version: cmd.Version, Tombstone: true}
+		observability.ObserveStoreApply("delete", "applied")
 
 	default:
+		observability.ObserveStoreApply("invalid", "rejected")
 		return ErrInvalidOperation
 	}
+	s.updateStateMetricsLocked()
 	return nil
 }
 
 // Get retrieves a key (read-only, no vnode index change).
 func (s *Store) Get(key string) ([]byte, error) {
+	started := time.Now()
 	s.vNodeMu.RLock()
 	val, exists := s.storage[key]
 	meta := s.meta[key]
 	s.vNodeMu.RUnlock()
 
 	if !exists || meta.Tombstone {
+		observability.ObserveStoreGet("miss", time.Since(started))
 		return nil, ErrKeyNotFound
 	}
 
+	observability.ObserveStoreGet("hit", time.Since(started))
 	return slices.Clone(val), nil
 }
 
@@ -190,6 +236,8 @@ func (s *Store) SnapshotVNode(vnodeID uint16) *VNodeSnapshot {
 		}{Key: key, Value: nil, Version: meta.Version, Tombstone: true})
 	}
 
+	observability.ObserveStoreSnapshot(len(snapshot.Entries))
+
 	return snapshot
 }
 
@@ -211,10 +259,14 @@ func (s *Store) DeleteVNodeData(vnodeID uint16) {
 		delete(s.meta, key)
 	}
 	for key := range s.tombstoneIdx[vnodeID] {
+		if s.tombstoneCount > 0 {
+			s.tombstoneCount--
+		}
 		delete(s.meta, key)
 	}
 
 	// Clear the vnode entry from index.
 	delete(s.vNodeIdx, vnodeID)
 	delete(s.tombstoneIdx, vnodeID)
+	s.updateStateMetricsLocked()
 }

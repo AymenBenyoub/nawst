@@ -16,6 +16,7 @@ import (
 	"time"
 
 	pb "github.com/AymenBenyoub/nawst/core/proto"
+	"github.com/AymenBenyoub/nawst/observability"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/reflection"
@@ -121,6 +122,11 @@ func (s *Server) NextVersion() uint64 {
 
 // gRPC Put RPC
 func (s *Server) Put(ctx context.Context, req *pb.PutRequest) (*emptypb.Empty, error) {
+	started := time.Now()
+	result := "error"
+	defer func() {
+		observability.ObserveRPC("put", result, time.Since(started))
+	}()
 	log.Printf("[rpc] PUT request key=%q bytes=%d", req.Key, len(req.Value))
 	is_powner, _, owner := s.Replicator.CheckOwnership(req.Key)
 	if !is_powner {
@@ -128,6 +134,7 @@ func (s *Server) Put(ctx context.Context, req *pb.PutRequest) (*emptypb.Empty, e
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "Failed to forward PUT to owner %s: %v", owner, err)
 		}
+		result = "forwarded"
 		log.Printf("[rpc] PUT key=%q forwarded to owner=%s", req.Key, owner)
 		return &emptypb.Empty{}, nil
 	} else {
@@ -157,6 +164,7 @@ func (s *Server) Put(ctx context.Context, req *pb.PutRequest) (*emptypb.Empty, e
 
 			cancel()
 		}
+		result = "ok"
 		log.Printf("[rpc] PUT key=%q completed", req.Key)
 		return &emptypb.Empty{}, nil
 	}
@@ -165,6 +173,11 @@ func (s *Server) Put(ctx context.Context, req *pb.PutRequest) (*emptypb.Empty, e
 // gRPC Get RPC
 
 func (s *Server) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, error) {
+	started := time.Now()
+	result := "error"
+	defer func() {
+		observability.ObserveRPC("get", result, time.Since(started))
+	}()
 	log.Printf("[rpc] GET request key=%q", req.Key)
 	is_powner, is_replica, owner := s.Replicator.CheckOwnership(req.Key)
 	if is_powner || is_replica {
@@ -178,6 +191,8 @@ func (s *Server) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, 
 				if src := s.Replicator.GetMigrationSourceForKey(req.Key); src != "" {
 					val, err := s.Replicator.ForwardToOwner(ctx, src, req)
 					if err == nil {
+						observability.IncGetMigrationFallback()
+						result = "fallback-source"
 						log.Printf("[rpc] GET key=%q miss during migration; forwarded to source=%s", req.Key, src)
 						return &pb.GetResponse{Value: val}, nil
 					}
@@ -189,11 +204,14 @@ func (s *Server) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, 
 						return nil, status.Errorf(codes.Internal, "Failed to forward GET to owner %s: %v", owner, err)
 					}
 					log.Printf("[rpc] GET key=%q miss on replica; forwarded to owner=%s", req.Key, owner)
+					result = "fallback-owner"
 					return &pb.GetResponse{Value: val}, nil
 				}
 			}
+			result = "error"
 			return nil, status.Errorf(codes.Internal, "Failed to GET key: %v", resp.Err)
 		}
+		result = "ok"
 		log.Printf("[rpc] GET key=%q served locally", req.Key)
 		return &pb.GetResponse{Value: resp.Value}, nil
 	}
@@ -202,12 +220,18 @@ func (s *Server) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, 
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "Failed to forward GET to owner %s: %v", owner, err)
 	}
+	result = "forwarded"
 	log.Printf("[rpc] GET key=%q forwarded to owner=%s", req.Key, owner)
 	return &pb.GetResponse{Value: val}, nil
 }
 
 // gRPC Delete RPC
 func (s *Server) Delete(ctx context.Context, req *pb.DeleteRequest) (*emptypb.Empty, error) {
+	started := time.Now()
+	result := "error"
+	defer func() {
+		observability.ObserveRPC("delete", result, time.Since(started))
+	}()
 	log.Printf("[rpc] DELETE request key=%q", req.Key)
 	is_powner, _, owner := s.Replicator.CheckOwnership(req.Key)
 	if !is_powner {
@@ -216,6 +240,7 @@ func (s *Server) Delete(ctx context.Context, req *pb.DeleteRequest) (*emptypb.Em
 		if err != nil {
 			return nil, status.Errorf(codes.Internal, "Failed to forward DELETE to owner %s: %v", owner, err)
 		}
+		result = "forwarded"
 		log.Printf("[rpc] DELETE key=%q forwarded to owner=%s", req.Key, owner)
 		return &emptypb.Empty{}, nil
 	} else {
@@ -244,11 +269,17 @@ func (s *Server) Delete(ctx context.Context, req *pb.DeleteRequest) (*emptypb.Em
 
 			cancel()
 		}
+		result = "ok"
 		log.Printf("[rpc] DELETE key=%q completed", req.Key)
 		return &emptypb.Empty{}, nil
 	}
 }
 func (s *Server) Replicate(ctx context.Context, req *pb.ReplicationRequest) (*emptypb.Empty, error) {
+	started := time.Now()
+	result := "error"
+	defer func() {
+		observability.ObserveRPC("replicate", result, time.Since(started))
+	}()
 	log.Printf("[replicator] received replication request: op=%v key=%q", req.Op, req.Key)
 
 	var op OpType
@@ -282,6 +313,7 @@ func (s *Server) Replicate(ctx context.Context, req *pb.ReplicationRequest) (*em
 	if resp.Err != nil {
 		return nil, status.Errorf(codes.Internal, "Replication failed: %v", resp.Err)
 	}
+	result = "ok"
 
 	log.Printf("[replicator] applied replicated request: op=%v key=%q", req.Op, req.Key)
 	return &emptypb.Empty{}, nil
@@ -411,6 +443,11 @@ func (s *Server) StreamKV(stream pb.KV_StreamKVServer) error {
 // Used during placement migration: receiving node applies snapshot to catch up.
 // Receiver reconstructs vnode index on apply; sender includes version for conflict detection.
 func (s *Server) TransferVNode(stream pb.KV_TransferVNodeServer) error {
+	started := time.Now()
+	result := "error"
+	defer func() {
+		observability.ObserveRPC("transfer_vnode", result, time.Since(started))
+	}()
 	// Receive first request with vnode ID and placement epoch
 	req, err := stream.Recv()
 	if err != nil {
@@ -453,6 +490,7 @@ func (s *Server) TransferVNode(stream pb.KV_TransferVNodeServer) error {
 		return status.Errorf(codes.Internal, "Failed to send end-of-stream: %v", err)
 	}
 
+	result = "ok"
 	log.Printf("[transfer] completed vnode=%d snapshot (%d entries)", vnodeID, len(snapshot.Entries))
 	return nil
 }

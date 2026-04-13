@@ -1,0 +1,13 @@
+global:
+  scrape_interval: 2s
+  evaluation_interval: 2s
+
+scrape_configs:
+  - job_name: nawst
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - node9999:11999
+          - node10000:12000
+          - node10001:12001
+          - node10002:12002

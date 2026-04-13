@@ -1,0 +1,713 @@
+{
+  "uid": "nawst-cluster-overview",
+  "title": "NAWST Unified Thesis Dashboard",
+  "tags": ["nawst", "cluster", "thesis", "kv", "observability"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 2,
+  "refresh": "5s",
+  "time": {
+    "from": "now-6h",
+    "to": "now"
+  },
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      }
+    ]
+  },
+  "templating": {
+    "list": [
+      {
+        "name": "instance",
+        "label": "Instance",
+        "type": "query",
+        "datasource": "Prometheus",
+        "query": "label_values(nawst_cluster_members, instance)",
+        "refresh": 1,
+        "includeAll": true,
+        "multi": true,
+        "allValue": ".*",
+        "current": {
+          "selected": true,
+          "text": "All",
+          "value": "$__all"
+        }
+      }
+    ]
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Cluster Members (Max)",
+      "datasource": "Prometheus",
+      "gridPos": { "x": 0, "y": 0, "w": 4, "h": 4 },
+      "targets": [
+        {
+          "expr": "max(nawst_cluster_members{instance=~\"$instance\"})",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Current Placement Epoch",
+      "datasource": "Prometheus",
+      "gridPos": { "x": 4, "y": 0, "w": 4, "h": 4 },
+      "targets": [
+        {
+          "expr": "max(nawst_placement_epoch_current{instance=~\"$instance\"})",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Active Migrations",
+      "datasource": "Prometheus",
+      "gridPos": { "x": 8, "y": 0, "w": 4, "h": 4 },
+      "targets": [
+        {
+          "expr": "sum(nawst_migration_active_vnodes{instance=~\"$instance\"})",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Client Throughput (ops/s)",
+      "datasource": "Prometheus",
+      "gridPos": { "x": 12, "y": 0, "w": 6, "h": 4 },
+      "targets": [
+        {
+          "expr": "sum(rate(nawst_rpc_requests_total{instance=~\"$instance\",method=~\"put|get|delete\"}[1m]))",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "decimals": 2
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "stat",
+      "title": "Write Quorum Success Rate",
+      "datasource": "Prometheus",
+      "gridPos": { "x": 18, "y": 0, "w": 6, "h": 4 },
+      "targets": [
+        {
+          "expr": "100 * sum(rate(nawst_replication_quorum_total{instance=~\"$instance\",result=\"ok\"}[5m])) / clamp_min(sum(rate(nawst_replication_quorum_total{instance=~\"$instance\"}[5m])), 0.0001)",
+          "refId": "A"
+        }
+      ],
+      "options": {
+        "colorMode": "value",
+        "graphMode": "none",
+        "justifyMode": "center",
+        "orientation": "horizontal",
+        "reduceOptions": { "calcs": ["lastNotNull"], "fields": "", "values": false },
+        "textMode": "auto"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent",
+          "decimals": 2
+        },
+        "overrides": []
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Throughput by Method (ops/s)",
+      "datasource": "Prometheus",
+      "gridPos": { "x": 0, "y": 4, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum by (method) (rate(nawst_rpc_requests_total{instance=~\"$instance\"}[1m]))",
+          "legendFormat": "{{method}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "RPC Result Rate by Outcome (ops/s)",
+      "datasource": "Prometheus",
+      "gridPos": { "x": 12, "y": 4, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum by (result) (rate(nawst_rpc_requests_total{instance=~\"$instance\",method=~\"put|get|delete\"}[1m]))",
+          "legendFormat": "{{result}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "RPC Latency p50/p95/p99 (All Methods)",
+      "datasource": "Prometheus",
+      "gridPos": { "x": 0, "y": 12, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(nawst_rpc_request_duration_seconds_bucket{instance=~\"$instance\"}[5m])))",
+          "legendFormat": "p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(nawst_rpc_request_duration_seconds_bucket{instance=~\"$instance\"}[5m])))",
+          "legendFormat": "p95",
+          "refId": "B"
+        },
+        {
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(nawst_rpc_request_duration_seconds_bucket{instance=~\"$instance\"}[5m])))",
+          "legendFormat": "p99",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "RPC Latency p95 by Method",
+      "datasource": "Prometheus",
+      "gridPos": { "x": 12, "y": 12, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le, method) (rate(nawst_rpc_request_duration_seconds_bucket{instance=~\"$instance\"}[5m])))",
+          "legendFormat": "{{method}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s",
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Replication Quorum Outcomes (ops/s)",
+      "datasource": "Prometheus",
+      "gridPos": { "x": 0, "y": 20, "w": 8, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum by (result) (rate(nawst_replication_quorum_total{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "{{result}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Replication Acks Distribution (p50/p95)",
+      "datasource": "Prometheus",
+      "gridPos": { "x": 8, "y": 20, "w": 8, "h": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(nawst_replication_acks_bucket{instance=~\"$instance\"}[5m])))",
+          "legendFormat": "acks p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(nawst_replication_acks_bucket{instance=~\"$instance\"}[5m])))",
+          "legendFormat": "acks p95",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Replication Targets Distribution (p50/p95)",
+      "datasource": "Prometheus",
+      "gridPos": { "x": 16, "y": 20, "w": 8, "h": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.50, sum by (le) (rate(nawst_replication_targets_bucket{instance=~\"$instance\"}[5m])))",
+          "legendFormat": "targets p50",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(nawst_replication_targets_bucket{instance=~\"$instance\"}[5m])))",
+          "legendFormat": "targets p95",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Placement Epoch by Instance",
+      "datasource": "Prometheus",
+      "gridPos": { "x": 0, "y": 28, "w": 8, "h": 8 },
+      "targets": [
+        {
+          "expr": "nawst_placement_epoch_current{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "decimals": 0
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Migration Churn (vnodes/s)",
+      "datasource": "Prometheus",
+      "gridPos": { "x": 8, "y": 28, "w": 8, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(nawst_migration_vnodes_gained_total{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "gained",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(nawst_migration_vnodes_lost_total{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "lost",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(rate(nawst_migration_vnodes_replica_added_total{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "replica_added",
+          "refId": "C"
+        },
+        {
+          "expr": "sum(rate(nawst_migration_vnodes_replica_changed_total{instance=~\"$instance\"}[5m]))",
+          "legendFormat": "replica_changed",
+          "refId": "D"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Transfer Throughput",
+      "datasource": "Prometheus",
+      "gridPos": { "x": 16, "y": 28, "w": 8, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(nawst_transfer_entries_total{instance=~\"$instance\"}[1m]))",
+          "legendFormat": "entries/sec",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(nawst_transfer_bytes_total{instance=~\"$instance\"}[1m]))",
+          "legendFormat": "bytes/sec",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Transfer Duration p95 + Success/Fail",
+      "datasource": "Prometheus",
+      "gridPos": { "x": 0, "y": 36, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(nawst_transfer_duration_seconds_bucket{instance=~\"$instance\"}[5m])))",
+          "legendFormat": "duration p95",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(nawst_transfer_attempts_total{instance=~\"$instance\",result=\"success\"}[5m]))",
+          "legendFormat": "success",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(rate(nawst_transfer_attempts_total{instance=~\"$instance\",result=\"failed\"}[5m]))",
+          "legendFormat": "failed",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Consistency Safety Signals",
+      "datasource": "Prometheus",
+      "gridPos": { "x": 12, "y": 36, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum(rate(nawst_stale_write_ignored_total{instance=~\"$instance\"}[1m]))",
+          "legendFormat": "stale_writes_ignored/sec",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(nawst_get_migration_fallback_total{instance=~\"$instance\"}[1m]))",
+          "legendFormat": "get_migration_fallback/sec",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Store Apply Outcomes (ops/s)",
+      "datasource": "Prometheus",
+      "gridPos": { "x": 0, "y": 44, "w": 8, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum by (op, result) (rate(nawst_store_apply_total{instance=~\"$instance\"}[1m]))",
+          "legendFormat": "{{op}}/{{result}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "desc" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Store GET Outcomes + Latency p95",
+      "datasource": "Prometheus",
+      "gridPos": { "x": 8, "y": 44, "w": 8, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum by (result) (rate(nawst_store_get_total{instance=~\"$instance\"}[1m]))",
+          "legendFormat": "get_{{result}}/sec",
+          "refId": "A"
+        },
+        {
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(nawst_store_get_duration_seconds_bucket{instance=~\"$instance\"}[5m])))",
+          "legendFormat": "get_p95_seconds",
+          "refId": "B"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 4
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Store State",
+      "datasource": "Prometheus",
+      "gridPos": { "x": 16, "y": 44, "w": 8, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum(nawst_store_keys{instance=~\"$instance\"})",
+          "legendFormat": "keys",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(nawst_store_tombstones{instance=~\"$instance\"})",
+          "legendFormat": "tombstones",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(nawst_store_value_bytes{instance=~\"$instance\"})",
+          "legendFormat": "value_bytes",
+          "refId": "C"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Capacity Utilization by Instance",
+      "datasource": "Prometheus",
+      "gridPos": { "x": 0, "y": 52, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "nawst_local_cpu_usage_ratio{instance=~\"$instance\"}",
+          "legendFormat": "CPU {{instance}}",
+          "refId": "A"
+        },
+        {
+          "expr": "nawst_local_mem_usage_ratio{instance=~\"$instance\"}",
+          "legendFormat": "Mem {{instance}}",
+          "refId": "B"
+        },
+        {
+          "expr": "nawst_local_net_usage_ratio{instance=~\"$instance\"}",
+          "legendFormat": "Net {{instance}}",
+          "refId": "C"
+        },
+        {
+          "expr": "nawst_local_disk_usage_ratio{instance=~\"$instance\"}",
+          "legendFormat": "Disk {{instance}}",
+          "refId": "D"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percentunit",
+          "decimals": 3
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Local RTT by Instance (ms)",
+      "datasource": "Prometheus",
+      "gridPos": { "x": 12, "y": 52, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "nawst_local_avg_rtt_ms{instance=~\"$instance\"}",
+          "legendFormat": "{{instance}}",
+          "refId": "A"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull", "mean", "max"] },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    },
+    {
+      "type": "timeseries",
+      "title": "Static Capacity by Instance",
+      "datasource": "Prometheus",
+      "gridPos": { "x": 0, "y": 60, "w": 24, "h": 8 },
+      "targets": [
+        {
+          "expr": "nawst_local_cpu_cores{instance=~\"$instance\"}",
+          "legendFormat": "cpu_cores {{instance}}",
+          "refId": "A"
+        },
+        {
+          "expr": "nawst_local_mem_gb{instance=~\"$instance\"}",
+          "legendFormat": "mem_gb {{instance}}",
+          "refId": "B"
+        },
+        {
+          "expr": "nawst_local_bandwidth_mbps{instance=~\"$instance\"}",
+          "legendFormat": "bandwidth_mbps {{instance}}",
+          "refId": "C"
+        },
+        {
+          "expr": "nawst_local_disk_gb{instance=~\"$instance\"}",
+          "legendFormat": "disk_gb {{instance}}",
+          "refId": "D"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "decimals": 2
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": { "displayMode": "table", "placement": "bottom", "calcs": ["lastNotNull"] },
+        "tooltip": { "mode": "multi", "sort": "none" }
+      }
+    }
+  ]
+}

@@ -11,6 +11,7 @@ import (
 
 	"github.com/AymenBenyoub/nawst/cluster"
 	"github.com/AymenBenyoub/nawst/core"
+	"github.com/AymenBenyoub/nawst/observability"
 )
 
 func main() {
@@ -34,6 +35,8 @@ func main() {
 
 	var walDir = flag.String("wal-dir", "", "directory for WAL files (default: kvst/node-<rpc-port>)")
 	var replicationFactor = flag.Int("rf", 3, "replication factor for the cluster")
+	var metricsBindAddr = flag.String("metrics-bind-addr", "0.0.0.0", "metrics http bind address")
+	var metricsPort = flag.Int("metrics-port", 0, "metrics http port (default rpc-port+2000)")
 	flag.Parse()
 	const writerBufferSize = 64 * 1024
 	const requestChannelSize = 10000
@@ -83,6 +86,12 @@ func main() {
 	go eventLoop.Run()
 
 	server := core.NewServer(reqCh, store)
+	resolvedMetricsPort := *metricsPort
+	if resolvedMetricsPort == 0 {
+		resolvedMetricsPort = *rpc_port + 2000
+	}
+	observability.StartMetricsServer(*metricsBindAddr, resolvedMetricsPort)
+
 	nodeID := fmt.Sprintf("node-%d", *rpc_port)
 	resolvedRaftPort := *raftPort
 	if resolvedRaftPort == 0 {

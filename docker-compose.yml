@@ -8,6 +8,7 @@ services:
     cap_add: ["NET_ADMIN", "NET_RAW"]
     environment:
       RPC_PORT: "9999"
+      METRICS_PORT: "11999"
       NODE_IP: "10.0.0.9"
       RAFT_BIND_ADDR: "0.0.0.0"
       RAFT_ADVERTISE_IP: "10.0.0.9"
@@ -22,6 +23,7 @@ services:
       - node9999_data:/data
     ports:
       - "9999:9999"
+      - "11999:11999"
     networks:
       kvnet:
         ipv4_address: 10.0.0.9
@@ -36,6 +38,7 @@ services:
     cap_add: ["NET_ADMIN", "NET_RAW"]
     environment:
       RPC_PORT: "10000"
+      METRICS_PORT: "12000"
       NODE_IP: "10.0.0.10"
       RAFT_BIND_ADDR: "0.0.0.0"
       RAFT_ADVERTISE_IP: "10.0.0.10"
@@ -50,6 +53,7 @@ services:
       - node10000_data:/data
     ports:
       - "10000:10000"
+      - "12000:12000"
     networks:
       kvnet:
         ipv4_address: 10.0.0.10
@@ -64,6 +68,7 @@ services:
     cap_add: ["NET_ADMIN", "NET_RAW"]
     environment:
       RPC_PORT: "10001"
+      METRICS_PORT: "12001"
       NODE_IP: "10.0.0.11"
       RAFT_BIND_ADDR: "0.0.0.0"
       RAFT_ADVERTISE_IP: "10.0.0.11"
@@ -78,6 +83,7 @@ services:
       - node10001_data:/data
     ports:
       - "10001:10001"
+      - "12001:12001"
     networks:
       kvnet:
         ipv4_address: 10.0.0.11
@@ -92,6 +98,7 @@ services:
     cap_add: ["NET_ADMIN", "NET_RAW"]
     environment:
       RPC_PORT: "10002"
+      METRICS_PORT: "12002"
       NODE_IP: "10.0.0.12"
       RAFT_BIND_ADDR: "0.0.0.0"
       RAFT_ADVERTISE_IP: "10.0.0.12"
@@ -106,6 +113,7 @@ services:
       - node10002_data:/data
     ports:
       - "10002:10002"
+      - "12002:12002"
     networks:
       kvnet:
         ipv4_address: 10.0.0.12
@@ -122,6 +130,39 @@ services:
     networks:
       kvnet:
         ipv4_address: 10.0.0.100
+
+  prometheus:
+    image: prom/prometheus:v2.55.1
+    container_name: PROMETHEUS
+    depends_on: ["node9999", "node10000", "node10001", "node10002"]
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.enable-lifecycle
+    volumes:
+      - ./docker/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    ports:
+      - "9090:9090"
+    networks:
+      kvnet:
+        ipv4_address: 10.0.0.101
+
+  grafana:
+    image: grafana/grafana:11.3.0
+    container_name: GRAFANA
+    depends_on: ["prometheus"]
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: admin
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    volumes:
+      - ./docker/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./docker/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3000:3000"
+    networks:
+      kvnet:
+        ipv4_address: 10.0.0.102
 
 networks:
   kvnet:
