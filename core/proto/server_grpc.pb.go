@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.6.1
 // - protoc             v3.21.12
-// source: server.proto
+// source: core/proto/server.proto
 
 package proto
 
@@ -20,12 +20,14 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	KV_Get_FullMethodName           = "/proto.KV/Get"
-	KV_Put_FullMethodName           = "/proto.KV/Put"
-	KV_Delete_FullMethodName        = "/proto.KV/Delete"
-	KV_Replicate_FullMethodName     = "/proto.KV/Replicate"
-	KV_StreamKV_FullMethodName      = "/proto.KV/StreamKV"
-	KV_TransferVNode_FullMethodName = "/proto.KV/TransferVNode"
+	KV_Get_FullMethodName             = "/proto.KV/Get"
+	KV_Put_FullMethodName             = "/proto.KV/Put"
+	KV_Delete_FullMethodName          = "/proto.KV/Delete"
+	KV_Replicate_FullMethodName       = "/proto.KV/Replicate"
+	KV_ReplicateBatch_FullMethodName  = "/proto.KV/ReplicateBatch"
+	KV_GetClusterState_FullMethodName = "/proto.KV/GetClusterState"
+	KV_StreamKV_FullMethodName        = "/proto.KV/StreamKV"
+	KV_TransferVNode_FullMethodName   = "/proto.KV/TransferVNode"
 )
 
 // KVClient is the client API for KV service.
@@ -36,6 +38,8 @@ type KVClient interface {
 	Put(ctx context.Context, in *PutRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	Delete(ctx context.Context, in *DeleteRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	Replicate(ctx context.Context, in *ReplicationRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	ReplicateBatch(ctx context.Context, in *ReplicationBatchRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	GetClusterState(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ClusterState, error)
 	StreamKV(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[StreamReq, StreamResp], error)
 	TransferVNode(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[VNodeTransferReq, VNodeTransferResp], error)
 }
@@ -88,6 +92,26 @@ func (c *kVClient) Replicate(ctx context.Context, in *ReplicationRequest, opts .
 	return out, nil
 }
 
+func (c *kVClient) ReplicateBatch(ctx context.Context, in *ReplicationBatchRequest, opts ...grpc.CallOption) (*emptypb.Empty, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(emptypb.Empty)
+	err := c.cc.Invoke(ctx, KV_ReplicateBatch_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *kVClient) GetClusterState(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ClusterState, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ClusterState)
+	err := c.cc.Invoke(ctx, KV_GetClusterState_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 func (c *kVClient) StreamKV(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[StreamReq, StreamResp], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	stream, err := c.cc.NewStream(ctx, &KV_ServiceDesc.Streams[0], KV_StreamKV_FullMethodName, cOpts...)
@@ -122,6 +146,8 @@ type KVServer interface {
 	Put(context.Context, *PutRequest) (*emptypb.Empty, error)
 	Delete(context.Context, *DeleteRequest) (*emptypb.Empty, error)
 	Replicate(context.Context, *ReplicationRequest) (*emptypb.Empty, error)
+	ReplicateBatch(context.Context, *ReplicationBatchRequest) (*emptypb.Empty, error)
+	GetClusterState(context.Context, *emptypb.Empty) (*ClusterState, error)
 	StreamKV(grpc.BidiStreamingServer[StreamReq, StreamResp]) error
 	TransferVNode(grpc.BidiStreamingServer[VNodeTransferReq, VNodeTransferResp]) error
 	mustEmbedUnimplementedKVServer()
@@ -145,6 +171,12 @@ func (UnimplementedKVServer) Delete(context.Context, *DeleteRequest) (*emptypb.E
 }
 func (UnimplementedKVServer) Replicate(context.Context, *ReplicationRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method Replicate not implemented")
+}
+func (UnimplementedKVServer) ReplicateBatch(context.Context, *ReplicationBatchRequest) (*emptypb.Empty, error) {
+	return nil, status.Error(codes.Unimplemented, "method ReplicateBatch not implemented")
+}
+func (UnimplementedKVServer) GetClusterState(context.Context, *emptypb.Empty) (*ClusterState, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetClusterState not implemented")
 }
 func (UnimplementedKVServer) StreamKV(grpc.BidiStreamingServer[StreamReq, StreamResp]) error {
 	return status.Error(codes.Unimplemented, "method StreamKV not implemented")
@@ -245,6 +277,42 @@ func _KV_Replicate_Handler(srv interface{}, ctx context.Context, dec func(interf
 	return interceptor(ctx, in, info, handler)
 }
 
+func _KV_ReplicateBatch_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ReplicationBatchRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KVServer).ReplicateBatch(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KV_ReplicateBatch_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KVServer).ReplicateBatch(ctx, req.(*ReplicationBatchRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _KV_GetClusterState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(emptypb.Empty)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(KVServer).GetClusterState(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: KV_GetClusterState_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(KVServer).GetClusterState(ctx, req.(*emptypb.Empty))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _KV_StreamKV_Handler(srv interface{}, stream grpc.ServerStream) error {
 	return srv.(KVServer).StreamKV(&grpc.GenericServerStream[StreamReq, StreamResp]{ServerStream: stream})
 }
@@ -282,6 +350,14 @@ var KV_ServiceDesc = grpc.ServiceDesc{
 			MethodName: "Replicate",
 			Handler:    _KV_Replicate_Handler,
 		},
+		{
+			MethodName: "ReplicateBatch",
+			Handler:    _KV_ReplicateBatch_Handler,
+		},
+		{
+			MethodName: "GetClusterState",
+			Handler:    _KV_GetClusterState_Handler,
+		},
 	},
 	Streams: []grpc.StreamDesc{
 		{
@@ -297,5 +373,5 @@ var KV_ServiceDesc = grpc.ServiceDesc{
 			ClientStreams: true,
 		},
 	},
-	Metadata: "server.proto",
+	Metadata: "core/proto/server.proto",
 }

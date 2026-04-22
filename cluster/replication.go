@@ -65,24 +65,28 @@ type Replicator struct {
 
 	migMu           sync.RWMutex
 	migrationSource map[uint16]string // vnode -> preferred source node during catch-up
+
+	replicationMu      sync.Mutex
+	replicationWorkers map[string]*replicationBatchWorker
 }
 
 func NewReplicator(id string, ml *memberlist.Memberlist, rf int) *Replicator {
 	return &Replicator{
-		ID:                id,
-		Ml:                ml,
-		peers:             make(map[string]pb.KVClient),
-		conns:             make(map[string]*grpc.ClientConn),
-		metrics:           []NodeMetrics{},
-		rttMatrix:         make(map[string]map[string]float64),
-		nodeRPCAddrs:      make(map[string]string),
-		ReplicationFactor: rf,
-		stopCh:            make(chan struct{}),
-		deadRow:           make(map[string]time.Time),
-		GracePeriod:       2 * time.Second,
-		metricEMA:         make(map[string]NodeMetrics),
-		degradedStreak:    make(map[string]int),
-		migrationSource:   make(map[uint16]string),
+		ID:                 id,
+		Ml:                 ml,
+		peers:              make(map[string]pb.KVClient),
+		conns:              make(map[string]*grpc.ClientConn),
+		metrics:            []NodeMetrics{},
+		rttMatrix:          make(map[string]map[string]float64),
+		nodeRPCAddrs:       make(map[string]string),
+		ReplicationFactor:  rf,
+		stopCh:             make(chan struct{}),
+		deadRow:            make(map[string]time.Time),
+		GracePeriod:        2 * time.Second,
+		metricEMA:          make(map[string]NodeMetrics),
+		degradedStreak:     make(map[string]int),
+		migrationSource:    make(map[uint16]string),
+		replicationWorkers: make(map[string]*replicationBatchWorker),
 	}
 }
 
@@ -1110,12 +1114,7 @@ func (r *Replicator) ReplicateToAll(ctx context.Context, op pb.Op, key string, v
 		return nil
 	}
 
-	type target struct {
-		id     string
-		client pb.KVClient
-	}
-
-	targets := make([]target, 0, len(members)-1)
+	targets := make([]string, 0, len(members)-1)
 	var firstErr error
 
 	resolveTargetsFromPlacement := func() {
@@ -1136,17 +1135,7 @@ func (r *Replicator) ReplicateToAll(ctx context.Context, op pb.Op, key string, v
 				continue
 			}
 			seen[replicaID] = struct{}{}
-
-			client, err := r.getOrCreateClientByNodeID(replicaID)
-			if err != nil {
-				if firstErr == nil {
-					firstErr = err
-					fmt.Printf("%v", firstErr)
-				}
-
-				continue
-			}
-			targets = append(targets, target{id: replicaID, client: client})
+			targets = append(targets, replicaID)
 		}
 
 	}
@@ -1175,88 +1164,88 @@ func (r *Replicator) ReplicateToAll(ctx context.Context, op pb.Op, key string, v
 		report("local_only", 0)
 		return nil
 	}
-	remaining := len(targets)
-	if acks+remaining < required {
+	if acks+len(targets) < required {
 		if firstErr != nil {
 			report("quorum_impossible", len(targets))
-			return fmt.Errorf("quorum impossible: need %d acks, have %d local + %d remotes: %w", required, acks, remaining, firstErr)
+			return fmt.Errorf("quorum impossible: need %d acks, have %d local + %d remotes: %w", required, acks, len(targets), firstErr)
 		}
 		report("quorum_impossible", len(targets))
-		return fmt.Errorf("quorum impossible: need %d acks, have %d local + %d remotes", required, acks, remaining)
+		return fmt.Errorf("quorum impossible: need %d acks, have %d local + %d remotes", required, acks, len(targets))
 	}
 
 	callCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 
 	resultCh := make(chan error, len(targets))
-	var wg sync.WaitGroup
-
-	for _, t := range targets {
-		wg.Add(1)
-		go func(pid string, c pb.KVClient) {
-			defer wg.Done()
-
-			cctx := callCtx
-			if _, hasDeadline := callCtx.Deadline(); !hasDeadline {
-				var cCancel context.CancelFunc
-				cctx, cCancel = context.WithTimeout(callCtx, 2*time.Second)
-				defer cCancel()
-			}
-			req := &pb.ReplicationRequest{
-				Op:      op,
-				Key:     key,
-				Value:   value,
-				VnodeId: uint32(vnodeID),
-				Version: version,
-			}
-
-			_, err := c.Replicate(cctx, req)
-			if err == nil {
-				r.debugf("[replicator] replication to %s succeeded: key=%q", pid, key)
-				resultCh <- nil
-				return
-			}
-
-			r.debugf("[replicator] replication to %s failed (will retry): key=%q error=%v", pid, key, err)
-			retryErr := retryReplication(pid, c, req, cctx)
-			if retryErr != nil {
-				r.debugf("[replicator] replication to %s failed after retries: key=%q", pid, key)
-				resultCh <- fmt.Errorf("replicate to %s failed after retries: %w", pid, retryErr)
-				return
-			}
-
-			r.debugf("[replicator] replication to %s succeeded after retries: key=%q", pid, key)
-			resultCh <- nil
-		}(t.id, t.client)
+	req := &pb.ReplicationRequest{
+		Op:      op,
+		Key:     key,
+		Value:   value,
+		VnodeId: uint32(vnodeID),
+		Version: version,
 	}
 
-	go func() {
-		wg.Wait()
-		close(resultCh)
-	}()
-
-	quorumReached := acks >= required
-
-	for err := range resultCh {
-		remaining--
-
-		if err == nil {
-			acks++
-			if acks >= required {
-				quorumReached = true
+	for _, targetID := range targets {
+		done, err := r.submitReplicationTask(targetID, req)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
 			}
-		} else if firstErr == nil {
-			firstErr = err
+			resultCh <- err
+			continue
 		}
 
-		if !quorumReached && acks+remaining < required {
-			cancel()
+		go func(pid string, done <-chan error) {
+			select {
+			case err := <-done:
+				if err == nil {
+					r.debugf("[replicator] replication batch to %s succeeded: key=%q", pid, key)
+				} else {
+					r.debugf("[replicator] replication batch to %s failed: key=%q error=%v", pid, key, err)
+				}
+				resultCh <- err
+			case <-callCtx.Done():
+				resultCh <- callCtx.Err()
+			}
+		}(targetID, done)
+	}
+
+	quorumReached := acks >= required
+	remaining := len(targets)
+
+	for remaining > 0 {
+		select {
+		case err := <-resultCh:
+			remaining--
+
+			if err == nil {
+				acks++
+				if acks >= required {
+					quorumReached = true
+					cancel()
+					report("ok", len(targets))
+					return nil
+				}
+			} else if firstErr == nil {
+				firstErr = err
+			}
+
+			if !quorumReached && acks+remaining < required {
+				cancel()
+				if firstErr != nil {
+					report("quorum_not_reached", len(targets))
+					return fmt.Errorf("write quorum not reached: got %d/%d acks: %w", acks, required, firstErr)
+				}
+				report("quorum_not_reached", len(targets))
+				return fmt.Errorf("write quorum not reached: got %d/%d acks", acks, required)
+			}
+		case <-callCtx.Done():
 			if firstErr != nil {
 				report("quorum_not_reached", len(targets))
 				return fmt.Errorf("write quorum not reached: got %d/%d acks: %w", acks, required, firstErr)
 			}
 			report("quorum_not_reached", len(targets))
-			return fmt.Errorf("write quorum not reached: got %d/%d acks", acks, required)
+			return fmt.Errorf("write quorum not reached: got %d/%d acks: %w", acks, required, callCtx.Err())
 		}
 	}
 
@@ -1574,6 +1563,7 @@ func (r *Replicator) ForwardToOwner(ctx context.Context, owner string, req any) 
 }
 func (r *Replicator) Close() error {
 	r.StopMetricsReporter()
+	r.stopReplicationWorkers()
 
 	r.mu.Lock()
 	defer r.mu.Unlock()

@@ -33,6 +33,7 @@ type Replicator interface {
 	ForwardToOwner(ctx context.Context, owner string, req any) ([]byte, error)
 	GetVNodeForKey(key string) uint16 // Returns vnode ID for a key; used to annotate commands
 	GetMigrationSourceForKey(key string) string
+	SnapshotClusterState() *pb.ClusterState
 }
 
 type Server struct {
@@ -219,13 +220,9 @@ func (s *Server) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, 
 	s.debugf("[rpc] GET request key=%q", req.Key)
 	is_powner, is_replica, owner := s.Replicator.CheckOwnership(req.Key)
 	if is_powner || is_replica {
-		resp := s.sendRequest(ctx, Request{
-			Op:           OpGet,
-			Key:          req.Key,
-			ResponseChan: make(chan Response, 1),
-		})
-		if resp.Err != nil {
-			if errors.Is(resp.Err, ErrKeyNotFound) {
+		val, err := s.Store.Get(req.Key)
+		if err != nil {
+			if errors.Is(err, ErrKeyNotFound) {
 				if src := s.Replicator.GetMigrationSourceForKey(req.Key); src != "" {
 					val, err := s.Replicator.ForwardToOwner(ctx, src, req)
 					if err == nil {
@@ -237,7 +234,6 @@ func (s *Server) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, 
 					}
 				}
 				if owner != "" {
-					// we're a replica but don't have the key locally.
 					val, err := s.Replicator.ForwardToOwner(ctx, owner, req)
 					if err != nil {
 						clientResult = "error"
@@ -251,12 +247,12 @@ func (s *Server) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, 
 			}
 			result = "error"
 			clientResult = "error"
-			return nil, status.Errorf(codes.Internal, "Failed to GET key: %v", resp.Err)
+			return nil, status.Errorf(codes.Internal, "Failed to GET key: %v", err)
 		}
 		result = "ok"
 		clientResult = "ok"
-		s.debugf("[rpc] GET key=%q served locally", req.Key)
-		return &pb.GetResponse{Value: resp.Value}, nil
+		s.debugf("[rpc] GET key=%q served locally via direct store read", req.Key)
+		return &pb.GetResponse{Value: val}, nil
 	}
 	// not responsible for this key - forward to owner
 	val, err := s.Replicator.ForwardToOwner(ctx, owner, req)
@@ -328,6 +324,75 @@ func (s *Server) Delete(ctx context.Context, req *pb.DeleteRequest) (*emptypb.Em
 		s.debugf("[rpc] DELETE key=%q completed", req.Key)
 		return &emptypb.Empty{}, nil
 	}
+}
+
+func (s *Server) ReplicateBatch(ctx context.Context, req *pb.ReplicationBatchRequest) (*emptypb.Empty, error) {
+	started := time.Now()
+	result := "error"
+	defer func() {
+		observability.ObserveRPC("replicate_batch", result, time.Since(started))
+	}()
+	if req == nil || len(req.Requests) == 0 {
+		result = "ok"
+		return &emptypb.Empty{}, nil
+	}
+
+	var wg sync.WaitGroup
+	errCh := make(chan error, len(req.Requests))
+	for _, item := range req.Requests {
+		if item == nil {
+			continue
+		}
+		item := item
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			resp := s.sendRequest(ctx, Request{
+				Op: func() OpType {
+					switch item.Op {
+					case pb.Op_PUT:
+						return OpPut
+					case pb.Op_DELETE:
+						return OpDelete
+					default:
+						return OpGet
+					}
+				}(),
+				Key:          item.Key,
+				Value:        item.Value,
+				VNodeID:      uint16(item.VnodeId),
+				Version:      item.Version,
+				ResponseChan: make(chan Response, 1),
+			})
+			if resp.Err != nil {
+				errCh <- resp.Err
+			}
+		}()
+	}
+
+	go func() {
+		wg.Wait()
+		close(errCh)
+	}()
+
+	var firstErr error
+	for err := range errCh {
+		if err != nil && firstErr == nil {
+			firstErr = err
+		}
+	}
+	if firstErr != nil {
+		return nil, status.Errorf(codes.Internal, "replication batch failed: %v", firstErr)
+	}
+	result = "ok"
+	return &emptypb.Empty{}, nil
+}
+
+func (s *Server) GetClusterState(ctx context.Context, _ *emptypb.Empty) (*pb.ClusterState, error) {
+	if s.Replicator == nil {
+		return &pb.ClusterState{}, nil
+	}
+	return s.Replicator.SnapshotClusterState(), nil
 }
 func (s *Server) Replicate(ctx context.Context, req *pb.ReplicationRequest) (*emptypb.Empty, error) {
 	started := time.Now()

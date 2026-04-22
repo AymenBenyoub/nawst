@@ -9,6 +9,8 @@ service KV {
     rpc Put(PutRequest) returns (google.protobuf.Empty);
     rpc Delete(DeleteRequest) returns (google.protobuf.Empty);
     rpc Replicate(ReplicationRequest) returns (google.protobuf.Empty);
+    rpc ReplicateBatch(ReplicationBatchRequest) returns (google.protobuf.Empty);
+    rpc GetClusterState(google.protobuf.Empty) returns (ClusterState);
     rpc StreamKV(stream StreamReq) returns (stream StreamResp);
     rpc TransferVNode(stream VNodeTransferReq) returns (stream VNodeTransferResp);
 }
@@ -37,6 +39,28 @@ message ReplicationRequest {
     bytes value =3;
     uint32 vnode_id = 4;
     uint64 version = 5;
+}
+
+message ReplicationBatchRequest {
+    repeated ReplicationRequest requests = 1;
+}
+
+message ClusterNode {
+    string id = 1;
+    string rpc_addr = 2;
+    double score = 3;
+}
+
+message ClusterVNode {
+    uint32 id = 1;
+    string primary = 2;
+    repeated string replicas = 3;
+}
+
+message ClusterState {
+    uint64 epoch = 1;
+    repeated ClusterNode nodes = 2;
+    repeated ClusterVNode vnodes = 3;
 }
 enum Op {
     PUT = 0;

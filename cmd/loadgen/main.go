@@ -12,10 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
-
-	"github.com/AymenBenyoub/nawst/core/proto"
+	"github.com/AymenBenyoub/nawst/cluster"
 )
 
 type LoadConfig struct {
@@ -218,17 +215,15 @@ func pickKey(cfg LoadConfig, kp keyPicker, r *rand.Rand) string {
 	return fmt.Sprintf("k%08d", kp.Next(r)%cfg.Keyspace)
 }
 
-func doOp(ctx context.Context, client proto.KVClient, op operation, key string, value []byte) error {
+func doOp(ctx context.Context, router *cluster.PlacementRouter, op operation, key string, value []byte) error {
 	switch op {
 	case opPut:
-		_, err := client.Put(ctx, &proto.PutRequest{Key: key, Value: value})
-		return err
+		return router.Put(ctx, key, value)
 	case opGet:
-		_, err := client.Get(ctx, &proto.GetRequest{Key: key})
+		_, err := router.Get(ctx, key)
 		return err
 	default:
-		_, err := client.Delete(ctx, &proto.DeleteRequest{Key: key})
-		return err
+		return router.Delete(ctx, key)
 	}
 }
 
@@ -329,7 +324,7 @@ func buildPicker(cfg LoadConfig, r *rand.Rand) (keyPicker, error) {
 	}
 }
 
-func prefill(cfg LoadConfig, clients []proto.KVClient) {
+func prefill(cfg LoadConfig, router *cluster.PlacementRouter) {
 	if cfg.PrefillKeys <= 0 {
 		return
 	}
@@ -353,7 +348,7 @@ func prefill(cfg LoadConfig, clients []proto.KVClient) {
 			v := randomValue(r, cfg.ValueSize)
 			for k := id; k < cfg.PrefillKeys; k += workers {
 				ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
-				_, err := clients[id%len(clients)].Put(ctx, &proto.PutRequest{Key: fmt.Sprintf("k%08d", k%cfg.Keyspace), Value: v})
+				err := router.Put(ctx, fmt.Sprintf("k%08d", k%cfg.Keyspace), v)
 				cancel()
 				if err != nil {
 					atomic.AddUint64(&failCount, 1)
@@ -382,7 +377,7 @@ func max(a, b float64) float64 {
 	return b
 }
 
-func runPhase(name string, cfg LoadConfig, clients []proto.KVClient, measure bool) *recorder {
+func runPhase(name string, cfg LoadConfig, router *cluster.PlacementRouter, measure bool) *recorder {
 	rec := newRecorder()
 	mix, err := buildMix(cfg)
 	if err != nil {
@@ -410,7 +405,6 @@ func runPhase(name string, cfg LoadConfig, clients []proto.KVClient, measure boo
 				return
 			}
 			value := randomValue(r, cfg.ValueSize)
-			client := clients[id%len(clients)]
 
 			for time.Now().Before(stopAt) {
 				op := mix.pick(r)
@@ -421,7 +415,7 @@ func runPhase(name string, cfg LoadConfig, clients []proto.KVClient, measure boo
 
 				started := time.Now()
 				ctx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
-				err := doOp(ctx, client, op, key, value)
+				err := doOp(ctx, router, op, key, value)
 				cancel()
 
 				if measure {
@@ -524,37 +518,31 @@ func parseFlags() LoadConfig {
 func main() {
 	cfg := parseFlags()
 
-	conns := make([]*grpc.ClientConn, cfg.Conns)
-	clients := make([]proto.KVClient, cfg.Clients)
-	for i := 0; i < cfg.Conns; i++ {
-		conn, err := grpc.NewClient(cfg.Addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-		if err != nil {
-			log.Fatalf("failed to connect: %v", err)
-		}
-		conns[i] = conn
-		defer conn.Close()
+	router := cluster.NewPlacementRouter(cfg.Addr)
+	refreshCtx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
+	if err := router.Refresh(refreshCtx); err != nil {
+		log.Printf("placement refresh failed, using bootstrap routing until retry: %v", err)
 	}
-	for i := 0; i < cfg.Clients; i++ {
-		clients[i] = proto.NewKVClient(conns[i%cfg.Conns])
-	}
+	cancel()
+	defer router.Close()
 
 	fmt.Println(strings.Repeat("=", 92))
 	fmt.Println("NAWST REAL WORKLOAD DRIVER")
 	fmt.Println(strings.Repeat("=", 92))
-	fmt.Printf("addr=%s clients=%d conns=%d timeout=%s value=%dB keyspace=%d prefill=%d\n",
-		cfg.Addr, cfg.Clients, cfg.Conns, cfg.Timeout, cfg.ValueSize, cfg.Keyspace, cfg.PrefillKeys)
+	fmt.Printf("addr=%s clients=%d timeout=%s value=%dB keyspace=%d prefill=%d\n",
+		cfg.Addr, cfg.Clients, cfg.Timeout, cfg.ValueSize, cfg.Keyspace, cfg.PrefillKeys)
 	fmt.Printf("dist=%s zipf(s=%.3f,v=%.3f) mix(read/write/delete)=%d/%d/%d target-ops=%d\n",
 		cfg.Distribution, cfg.ZipfS, cfg.ZipfV, cfg.ReadPct, cfg.WritePct, cfg.DeletePct, cfg.TargetOpsPerSec)
 	fmt.Printf("warmup=%s measure=%s progress=%s\n", cfg.Warmup, cfg.Duration, cfg.ProgressEvery)
 
-	prefill(cfg, clients)
+	prefill(cfg, router)
 
 	if cfg.Warmup > 0 {
 		warmCfg := cfg
 		warmCfg.Duration = cfg.Warmup
-		_ = runPhase("warmup", warmCfg, clients, false)
+		_ = runPhase("warmup", warmCfg, router, false)
 	}
 
-	measured := runPhase("measured", cfg, clients, true)
+	measured := runPhase("measured", cfg, router, true)
 	printReport("MEASURED WORKLOAD SUMMARY", measured.snapshot(), measured.bounds)
 }

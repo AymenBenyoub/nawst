@@ -2,7 +2,7 @@
 // versions:
 // 	protoc-gen-go v1.36.11
 // 	protoc        v3.21.12
-// source: server.proto
+// source: core/proto/server.proto
 
 package proto
 
@@ -55,11 +55,11 @@ func (x Op) String() string {
 }
 
 func (Op) Descriptor() protoreflect.EnumDescriptor {
-	return file_server_proto_enumTypes[0].Descriptor()
+	return file_core_proto_server_proto_enumTypes[0].Descriptor()
 }
 
 func (Op) Type() protoreflect.EnumType {
-	return &file_server_proto_enumTypes[0]
+	return &file_core_proto_server_proto_enumTypes[0]
 }
 
 func (x Op) Number() protoreflect.EnumNumber {
@@ -68,7 +68,7 @@ func (x Op) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use Op.Descriptor instead.
 func (Op) EnumDescriptor() ([]byte, []int) {
-	return file_server_proto_rawDescGZIP(), []int{0}
+	return file_core_proto_server_proto_rawDescGZIP(), []int{0}
 }
 
 type GetRequest struct {
@@ -80,7 +80,7 @@ type GetRequest struct {
 
 func (x *GetRequest) Reset() {
 	*x = GetRequest{}
-	mi := &file_server_proto_msgTypes[0]
+	mi := &file_core_proto_server_proto_msgTypes[0]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -92,7 +92,7 @@ func (x *GetRequest) String() string {
 func (*GetRequest) ProtoMessage() {}
 
 func (x *GetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_server_proto_msgTypes[0]
+	mi := &file_core_proto_server_proto_msgTypes[0]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -105,7 +105,7 @@ func (x *GetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetRequest.ProtoReflect.Descriptor instead.
 func (*GetRequest) Descriptor() ([]byte, []int) {
-	return file_server_proto_rawDescGZIP(), []int{0}
+	return file_core_proto_server_proto_rawDescGZIP(), []int{0}
 }
 
 func (x *GetRequest) GetKey() string {
@@ -124,7 +124,7 @@ type GetResponse struct {
 
 func (x *GetResponse) Reset() {
 	*x = GetResponse{}
-	mi := &file_server_proto_msgTypes[1]
+	mi := &file_core_proto_server_proto_msgTypes[1]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -136,7 +136,7 @@ func (x *GetResponse) String() string {
 func (*GetResponse) ProtoMessage() {}
 
 func (x *GetResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_server_proto_msgTypes[1]
+	mi := &file_core_proto_server_proto_msgTypes[1]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -149,7 +149,7 @@ func (x *GetResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use GetResponse.ProtoReflect.Descriptor instead.
 func (*GetResponse) Descriptor() ([]byte, []int) {
-	return file_server_proto_rawDescGZIP(), []int{1}
+	return file_core_proto_server_proto_rawDescGZIP(), []int{1}
 }
 
 func (x *GetResponse) GetValue() []byte {
@@ -169,7 +169,7 @@ type PutRequest struct {
 
 func (x *PutRequest) Reset() {
 	*x = PutRequest{}
-	mi := &file_server_proto_msgTypes[2]
+	mi := &file_core_proto_server_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -181,7 +181,7 @@ func (x *PutRequest) String() string {
 func (*PutRequest) ProtoMessage() {}
 
 func (x *PutRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_server_proto_msgTypes[2]
+	mi := &file_core_proto_server_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -194,7 +194,7 @@ func (x *PutRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PutRequest.ProtoReflect.Descriptor instead.
 func (*PutRequest) Descriptor() ([]byte, []int) {
-	return file_server_proto_rawDescGZIP(), []int{2}
+	return file_core_proto_server_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *PutRequest) GetKey() string {
@@ -220,7 +220,7 @@ type DeleteRequest struct {
 
 func (x *DeleteRequest) Reset() {
 	*x = DeleteRequest{}
-	mi := &file_server_proto_msgTypes[3]
+	mi := &file_core_proto_server_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -232,7 +232,7 @@ func (x *DeleteRequest) String() string {
 func (*DeleteRequest) ProtoMessage() {}
 
 func (x *DeleteRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_server_proto_msgTypes[3]
+	mi := &file_core_proto_server_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -245,7 +245,7 @@ func (x *DeleteRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteRequest.ProtoReflect.Descriptor instead.
 func (*DeleteRequest) Descriptor() ([]byte, []int) {
-	return file_server_proto_rawDescGZIP(), []int{3}
+	return file_core_proto_server_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *DeleteRequest) GetKey() string {
@@ -268,7 +268,7 @@ type ReplicationRequest struct {
 
 func (x *ReplicationRequest) Reset() {
 	*x = ReplicationRequest{}
-	mi := &file_server_proto_msgTypes[4]
+	mi := &file_core_proto_server_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -280,7 +280,7 @@ func (x *ReplicationRequest) String() string {
 func (*ReplicationRequest) ProtoMessage() {}
 
 func (x *ReplicationRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_server_proto_msgTypes[4]
+	mi := &file_core_proto_server_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -293,7 +293,7 @@ func (x *ReplicationRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ReplicationRequest.ProtoReflect.Descriptor instead.
 func (*ReplicationRequest) Descriptor() ([]byte, []int) {
-	return file_server_proto_rawDescGZIP(), []int{4}
+	return file_core_proto_server_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *ReplicationRequest) GetOp() Op {
@@ -331,6 +331,230 @@ func (x *ReplicationRequest) GetVersion() uint64 {
 	return 0
 }
 
+type ReplicationBatchRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Requests      []*ReplicationRequest  `protobuf:"bytes,1,rep,name=requests,proto3" json:"requests,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ReplicationBatchRequest) Reset() {
+	*x = ReplicationBatchRequest{}
+	mi := &file_core_proto_server_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ReplicationBatchRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ReplicationBatchRequest) ProtoMessage() {}
+
+func (x *ReplicationBatchRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_core_proto_server_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ReplicationBatchRequest.ProtoReflect.Descriptor instead.
+func (*ReplicationBatchRequest) Descriptor() ([]byte, []int) {
+	return file_core_proto_server_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *ReplicationBatchRequest) GetRequests() []*ReplicationRequest {
+	if x != nil {
+		return x.Requests
+	}
+	return nil
+}
+
+type ClusterNode struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	RpcAddr       string                 `protobuf:"bytes,2,opt,name=rpc_addr,json=rpcAddr,proto3" json:"rpc_addr,omitempty"`
+	Score         float64                `protobuf:"fixed64,3,opt,name=score,proto3" json:"score,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ClusterNode) Reset() {
+	*x = ClusterNode{}
+	mi := &file_core_proto_server_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ClusterNode) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ClusterNode) ProtoMessage() {}
+
+func (x *ClusterNode) ProtoReflect() protoreflect.Message {
+	mi := &file_core_proto_server_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ClusterNode.ProtoReflect.Descriptor instead.
+func (*ClusterNode) Descriptor() ([]byte, []int) {
+	return file_core_proto_server_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *ClusterNode) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *ClusterNode) GetRpcAddr() string {
+	if x != nil {
+		return x.RpcAddr
+	}
+	return ""
+}
+
+func (x *ClusterNode) GetScore() float64 {
+	if x != nil {
+		return x.Score
+	}
+	return 0
+}
+
+type ClusterVNode struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            uint32                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
+	Primary       string                 `protobuf:"bytes,2,opt,name=primary,proto3" json:"primary,omitempty"`
+	Replicas      []string               `protobuf:"bytes,3,rep,name=replicas,proto3" json:"replicas,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ClusterVNode) Reset() {
+	*x = ClusterVNode{}
+	mi := &file_core_proto_server_proto_msgTypes[7]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ClusterVNode) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ClusterVNode) ProtoMessage() {}
+
+func (x *ClusterVNode) ProtoReflect() protoreflect.Message {
+	mi := &file_core_proto_server_proto_msgTypes[7]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ClusterVNode.ProtoReflect.Descriptor instead.
+func (*ClusterVNode) Descriptor() ([]byte, []int) {
+	return file_core_proto_server_proto_rawDescGZIP(), []int{7}
+}
+
+func (x *ClusterVNode) GetId() uint32 {
+	if x != nil {
+		return x.Id
+	}
+	return 0
+}
+
+func (x *ClusterVNode) GetPrimary() string {
+	if x != nil {
+		return x.Primary
+	}
+	return ""
+}
+
+func (x *ClusterVNode) GetReplicas() []string {
+	if x != nil {
+		return x.Replicas
+	}
+	return nil
+}
+
+type ClusterState struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Epoch         uint64                 `protobuf:"varint,1,opt,name=epoch,proto3" json:"epoch,omitempty"`
+	Nodes         []*ClusterNode         `protobuf:"bytes,2,rep,name=nodes,proto3" json:"nodes,omitempty"`
+	Vnodes        []*ClusterVNode        `protobuf:"bytes,3,rep,name=vnodes,proto3" json:"vnodes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ClusterState) Reset() {
+	*x = ClusterState{}
+	mi := &file_core_proto_server_proto_msgTypes[8]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ClusterState) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ClusterState) ProtoMessage() {}
+
+func (x *ClusterState) ProtoReflect() protoreflect.Message {
+	mi := &file_core_proto_server_proto_msgTypes[8]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ClusterState.ProtoReflect.Descriptor instead.
+func (*ClusterState) Descriptor() ([]byte, []int) {
+	return file_core_proto_server_proto_rawDescGZIP(), []int{8}
+}
+
+func (x *ClusterState) GetEpoch() uint64 {
+	if x != nil {
+		return x.Epoch
+	}
+	return 0
+}
+
+func (x *ClusterState) GetNodes() []*ClusterNode {
+	if x != nil {
+		return x.Nodes
+	}
+	return nil
+}
+
+func (x *ClusterState) GetVnodes() []*ClusterVNode {
+	if x != nil {
+		return x.Vnodes
+	}
+	return nil
+}
+
 type StreamReq struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Op            Op                     `protobuf:"varint,1,opt,name=op,proto3,enum=proto.Op" json:"op,omitempty"`
@@ -342,7 +566,7 @@ type StreamReq struct {
 
 func (x *StreamReq) Reset() {
 	*x = StreamReq{}
-	mi := &file_server_proto_msgTypes[5]
+	mi := &file_core_proto_server_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -354,7 +578,7 @@ func (x *StreamReq) String() string {
 func (*StreamReq) ProtoMessage() {}
 
 func (x *StreamReq) ProtoReflect() protoreflect.Message {
-	mi := &file_server_proto_msgTypes[5]
+	mi := &file_core_proto_server_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -367,7 +591,7 @@ func (x *StreamReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamReq.ProtoReflect.Descriptor instead.
 func (*StreamReq) Descriptor() ([]byte, []int) {
-	return file_server_proto_rawDescGZIP(), []int{5}
+	return file_core_proto_server_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *StreamReq) GetOp() Op {
@@ -402,7 +626,7 @@ type StreamResp struct {
 
 func (x *StreamResp) Reset() {
 	*x = StreamResp{}
-	mi := &file_server_proto_msgTypes[6]
+	mi := &file_core_proto_server_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -414,7 +638,7 @@ func (x *StreamResp) String() string {
 func (*StreamResp) ProtoMessage() {}
 
 func (x *StreamResp) ProtoReflect() protoreflect.Message {
-	mi := &file_server_proto_msgTypes[6]
+	mi := &file_core_proto_server_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -427,7 +651,7 @@ func (x *StreamResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use StreamResp.ProtoReflect.Descriptor instead.
 func (*StreamResp) Descriptor() ([]byte, []int) {
-	return file_server_proto_rawDescGZIP(), []int{6}
+	return file_core_proto_server_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *StreamResp) GetOp() Op {
@@ -463,7 +687,7 @@ type VNodeTransferReq struct {
 
 func (x *VNodeTransferReq) Reset() {
 	*x = VNodeTransferReq{}
-	mi := &file_server_proto_msgTypes[7]
+	mi := &file_core_proto_server_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -475,7 +699,7 @@ func (x *VNodeTransferReq) String() string {
 func (*VNodeTransferReq) ProtoMessage() {}
 
 func (x *VNodeTransferReq) ProtoReflect() protoreflect.Message {
-	mi := &file_server_proto_msgTypes[7]
+	mi := &file_core_proto_server_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -488,7 +712,7 @@ func (x *VNodeTransferReq) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VNodeTransferReq.ProtoReflect.Descriptor instead.
 func (*VNodeTransferReq) Descriptor() ([]byte, []int) {
-	return file_server_proto_rawDescGZIP(), []int{7}
+	return file_core_proto_server_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *VNodeTransferReq) GetVnodeId() uint32 {
@@ -525,7 +749,7 @@ type VNodeTransferResp struct {
 
 func (x *VNodeTransferResp) Reset() {
 	*x = VNodeTransferResp{}
-	mi := &file_server_proto_msgTypes[8]
+	mi := &file_core_proto_server_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -537,7 +761,7 @@ func (x *VNodeTransferResp) String() string {
 func (*VNodeTransferResp) ProtoMessage() {}
 
 func (x *VNodeTransferResp) ProtoReflect() protoreflect.Message {
-	mi := &file_server_proto_msgTypes[8]
+	mi := &file_core_proto_server_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -550,7 +774,7 @@ func (x *VNodeTransferResp) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use VNodeTransferResp.ProtoReflect.Descriptor instead.
 func (*VNodeTransferResp) Descriptor() ([]byte, []int) {
-	return file_server_proto_rawDescGZIP(), []int{8}
+	return file_core_proto_server_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *VNodeTransferResp) GetVnodeId() uint32 {
@@ -609,11 +833,11 @@ func (x *VNodeTransferResp) GetTombstone() bool {
 	return false
 }
 
-var File_server_proto protoreflect.FileDescriptor
+var File_core_proto_server_proto protoreflect.FileDescriptor
 
-const file_server_proto_rawDesc = "" +
+const file_core_proto_server_proto_rawDesc = "" +
 	"\n" +
-	"\fserver.proto\x12\x05proto\x1a\x1bgoogle/protobuf/empty.proto\"\x1e\n" +
+	"\x17core/proto/server.proto\x12\x05proto\x1a\x1bgoogle/protobuf/empty.proto\"\x1e\n" +
 	"\n" +
 	"GetRequest\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\"#\n" +
@@ -630,7 +854,21 @@ const file_server_proto_rawDesc = "" +
 	"\x03key\x18\x02 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x03 \x01(\fR\x05value\x12\x19\n" +
 	"\bvnode_id\x18\x04 \x01(\rR\avnodeId\x12\x18\n" +
-	"\aversion\x18\x05 \x01(\x04R\aversion\"N\n" +
+	"\aversion\x18\x05 \x01(\x04R\aversion\"P\n" +
+	"\x17ReplicationBatchRequest\x125\n" +
+	"\brequests\x18\x01 \x03(\v2\x19.proto.ReplicationRequestR\brequests\"N\n" +
+	"\vClusterNode\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x19\n" +
+	"\brpc_addr\x18\x02 \x01(\tR\arpcAddr\x12\x14\n" +
+	"\x05score\x18\x03 \x01(\x01R\x05score\"T\n" +
+	"\fClusterVNode\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\rR\x02id\x12\x18\n" +
+	"\aprimary\x18\x02 \x01(\tR\aprimary\x12\x1a\n" +
+	"\breplicas\x18\x03 \x03(\tR\breplicas\"{\n" +
+	"\fClusterState\x12\x14\n" +
+	"\x05epoch\x18\x01 \x01(\x04R\x05epoch\x12(\n" +
+	"\x05nodes\x18\x02 \x03(\v2\x12.proto.ClusterNodeR\x05nodes\x12+\n" +
+	"\x06vnodes\x18\x03 \x03(\v2\x13.proto.ClusterVNodeR\x06vnodes\"N\n" +
 	"\tStreamReq\x12\x19\n" +
 	"\x02op\x18\x01 \x01(\x0e2\t.proto.OpR\x02op\x12\x10\n" +
 	"\x03key\x18\x02 \x01(\tR\x03key\x12\x14\n" +
@@ -656,86 +894,99 @@ const file_server_proto_rawDesc = "" +
 	"\x03PUT\x10\x00\x12\a\n" +
 	"\x03GET\x10\x01\x12\n" +
 	"\n" +
-	"\x06DELETE\x10\x022\xd9\x02\n" +
+	"\x06DELETE\x10\x022\xe3\x03\n" +
 	"\x02KV\x12,\n" +
 	"\x03Get\x12\x11.proto.GetRequest\x1a\x12.proto.GetResponse\x120\n" +
 	"\x03Put\x12\x11.proto.PutRequest\x1a\x16.google.protobuf.Empty\x126\n" +
 	"\x06Delete\x12\x14.proto.DeleteRequest\x1a\x16.google.protobuf.Empty\x12>\n" +
-	"\tReplicate\x12\x19.proto.ReplicationRequest\x1a\x16.google.protobuf.Empty\x123\n" +
+	"\tReplicate\x12\x19.proto.ReplicationRequest\x1a\x16.google.protobuf.Empty\x12H\n" +
+	"\x0eReplicateBatch\x12\x1e.proto.ReplicationBatchRequest\x1a\x16.google.protobuf.Empty\x12>\n" +
+	"\x0fGetClusterState\x12\x16.google.protobuf.Empty\x1a\x13.proto.ClusterState\x123\n" +
 	"\bStreamKV\x12\x10.proto.StreamReq\x1a\x11.proto.StreamResp(\x010\x01\x12F\n" +
 	"\rTransferVNode\x12\x17.proto.VNodeTransferReq\x1a\x18.proto.VNodeTransferResp(\x010\x01B*Z(github.com/AymenBenyoub/nawst/core/protob\x06proto3"
 
 var (
-	file_server_proto_rawDescOnce sync.Once
-	file_server_proto_rawDescData []byte
+	file_core_proto_server_proto_rawDescOnce sync.Once
+	file_core_proto_server_proto_rawDescData []byte
 )
 
-func file_server_proto_rawDescGZIP() []byte {
-	file_server_proto_rawDescOnce.Do(func() {
-		file_server_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_server_proto_rawDesc), len(file_server_proto_rawDesc)))
+func file_core_proto_server_proto_rawDescGZIP() []byte {
+	file_core_proto_server_proto_rawDescOnce.Do(func() {
+		file_core_proto_server_proto_rawDescData = protoimpl.X.CompressGZIP(unsafe.Slice(unsafe.StringData(file_core_proto_server_proto_rawDesc), len(file_core_proto_server_proto_rawDesc)))
 	})
-	return file_server_proto_rawDescData
+	return file_core_proto_server_proto_rawDescData
 }
 
-var file_server_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
-var file_server_proto_msgTypes = make([]protoimpl.MessageInfo, 9)
-var file_server_proto_goTypes = []any{
-	(Op)(0),                    // 0: proto.Op
-	(*GetRequest)(nil),         // 1: proto.GetRequest
-	(*GetResponse)(nil),        // 2: proto.GetResponse
-	(*PutRequest)(nil),         // 3: proto.PutRequest
-	(*DeleteRequest)(nil),      // 4: proto.DeleteRequest
-	(*ReplicationRequest)(nil), // 5: proto.ReplicationRequest
-	(*StreamReq)(nil),          // 6: proto.StreamReq
-	(*StreamResp)(nil),         // 7: proto.StreamResp
-	(*VNodeTransferReq)(nil),   // 8: proto.VNodeTransferReq
-	(*VNodeTransferResp)(nil),  // 9: proto.VNodeTransferResp
-	(*emptypb.Empty)(nil),      // 10: google.protobuf.Empty
+var file_core_proto_server_proto_enumTypes = make([]protoimpl.EnumInfo, 1)
+var file_core_proto_server_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_core_proto_server_proto_goTypes = []any{
+	(Op)(0),                         // 0: proto.Op
+	(*GetRequest)(nil),              // 1: proto.GetRequest
+	(*GetResponse)(nil),             // 2: proto.GetResponse
+	(*PutRequest)(nil),              // 3: proto.PutRequest
+	(*DeleteRequest)(nil),           // 4: proto.DeleteRequest
+	(*ReplicationRequest)(nil),      // 5: proto.ReplicationRequest
+	(*ReplicationBatchRequest)(nil), // 6: proto.ReplicationBatchRequest
+	(*ClusterNode)(nil),             // 7: proto.ClusterNode
+	(*ClusterVNode)(nil),            // 8: proto.ClusterVNode
+	(*ClusterState)(nil),            // 9: proto.ClusterState
+	(*StreamReq)(nil),               // 10: proto.StreamReq
+	(*StreamResp)(nil),              // 11: proto.StreamResp
+	(*VNodeTransferReq)(nil),        // 12: proto.VNodeTransferReq
+	(*VNodeTransferResp)(nil),       // 13: proto.VNodeTransferResp
+	(*emptypb.Empty)(nil),           // 14: google.protobuf.Empty
 }
-var file_server_proto_depIdxs = []int32{
+var file_core_proto_server_proto_depIdxs = []int32{
 	0,  // 0: proto.ReplicationRequest.op:type_name -> proto.Op
-	0,  // 1: proto.StreamReq.op:type_name -> proto.Op
-	0,  // 2: proto.StreamResp.op:type_name -> proto.Op
-	1,  // 3: proto.KV.Get:input_type -> proto.GetRequest
-	3,  // 4: proto.KV.Put:input_type -> proto.PutRequest
-	4,  // 5: proto.KV.Delete:input_type -> proto.DeleteRequest
-	5,  // 6: proto.KV.Replicate:input_type -> proto.ReplicationRequest
-	6,  // 7: proto.KV.StreamKV:input_type -> proto.StreamReq
-	8,  // 8: proto.KV.TransferVNode:input_type -> proto.VNodeTransferReq
-	2,  // 9: proto.KV.Get:output_type -> proto.GetResponse
-	10, // 10: proto.KV.Put:output_type -> google.protobuf.Empty
-	10, // 11: proto.KV.Delete:output_type -> google.protobuf.Empty
-	10, // 12: proto.KV.Replicate:output_type -> google.protobuf.Empty
-	7,  // 13: proto.KV.StreamKV:output_type -> proto.StreamResp
-	9,  // 14: proto.KV.TransferVNode:output_type -> proto.VNodeTransferResp
-	9,  // [9:15] is the sub-list for method output_type
-	3,  // [3:9] is the sub-list for method input_type
-	3,  // [3:3] is the sub-list for extension type_name
-	3,  // [3:3] is the sub-list for extension extendee
-	0,  // [0:3] is the sub-list for field type_name
+	5,  // 1: proto.ReplicationBatchRequest.requests:type_name -> proto.ReplicationRequest
+	7,  // 2: proto.ClusterState.nodes:type_name -> proto.ClusterNode
+	8,  // 3: proto.ClusterState.vnodes:type_name -> proto.ClusterVNode
+	0,  // 4: proto.StreamReq.op:type_name -> proto.Op
+	0,  // 5: proto.StreamResp.op:type_name -> proto.Op
+	1,  // 6: proto.KV.Get:input_type -> proto.GetRequest
+	3,  // 7: proto.KV.Put:input_type -> proto.PutRequest
+	4,  // 8: proto.KV.Delete:input_type -> proto.DeleteRequest
+	5,  // 9: proto.KV.Replicate:input_type -> proto.ReplicationRequest
+	6,  // 10: proto.KV.ReplicateBatch:input_type -> proto.ReplicationBatchRequest
+	14, // 11: proto.KV.GetClusterState:input_type -> google.protobuf.Empty
+	10, // 12: proto.KV.StreamKV:input_type -> proto.StreamReq
+	12, // 13: proto.KV.TransferVNode:input_type -> proto.VNodeTransferReq
+	2,  // 14: proto.KV.Get:output_type -> proto.GetResponse
+	14, // 15: proto.KV.Put:output_type -> google.protobuf.Empty
+	14, // 16: proto.KV.Delete:output_type -> google.protobuf.Empty
+	14, // 17: proto.KV.Replicate:output_type -> google.protobuf.Empty
+	14, // 18: proto.KV.ReplicateBatch:output_type -> google.protobuf.Empty
+	9,  // 19: proto.KV.GetClusterState:output_type -> proto.ClusterState
+	11, // 20: proto.KV.StreamKV:output_type -> proto.StreamResp
+	13, // 21: proto.KV.TransferVNode:output_type -> proto.VNodeTransferResp
+	14, // [14:22] is the sub-list for method output_type
+	6,  // [6:14] is the sub-list for method input_type
+	6,  // [6:6] is the sub-list for extension type_name
+	6,  // [6:6] is the sub-list for extension extendee
+	0,  // [0:6] is the sub-list for field type_name
 }
 
-func init() { file_server_proto_init() }
-func file_server_proto_init() {
-	if File_server_proto != nil {
+func init() { file_core_proto_server_proto_init() }
+func file_core_proto_server_proto_init() {
+	if File_core_proto_server_proto != nil {
 		return
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
-			RawDescriptor: unsafe.Slice(unsafe.StringData(file_server_proto_rawDesc), len(file_server_proto_rawDesc)),
+			RawDescriptor: unsafe.Slice(unsafe.StringData(file_core_proto_server_proto_rawDesc), len(file_core_proto_server_proto_rawDesc)),
 			NumEnums:      1,
-			NumMessages:   9,
+			NumMessages:   13,
 			NumExtensions: 0,
 			NumServices:   1,
 		},
-		GoTypes:           file_server_proto_goTypes,
-		DependencyIndexes: file_server_proto_depIdxs,
-		EnumInfos:         file_server_proto_enumTypes,
-		MessageInfos:      file_server_proto_msgTypes,
+		GoTypes:           file_core_proto_server_proto_goTypes,
+		DependencyIndexes: file_core_proto_server_proto_depIdxs,
+		EnumInfos:         file_core_proto_server_proto_enumTypes,
+		MessageInfos:      file_core_proto_server_proto_msgTypes,
 	}.Build()
-	File_server_proto = out.File
-	file_server_proto_goTypes = nil
-	file_server_proto_depIdxs = nil
+	File_core_proto_server_proto = out.File
+	file_core_proto_server_proto_goTypes = nil
+	file_core_proto_server_proto_depIdxs = nil
 }

@@ -11,10 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
-
-	pb "github.com/AymenBenyoub/nawst/core/proto"
+	"github.com/AymenBenyoub/nawst/cluster"
 )
 
 var (
@@ -25,17 +22,15 @@ var (
 func main() {
 	flag.Parse()
 
-	// NewClient is non-blocking. It won't fail even if the server is offline.
-	conn, err := grpc.NewClient(
-		*addr,
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
-	)
-	if err != nil {
-		log.Fatalf("did not connect: %v", err)
+	router := cluster.NewPlacementRouter(*addr)
+	refreshCtx, cancel := context.WithTimeout(context.Background(), *rpcTimeout)
+	refreshErr := router.Refresh(refreshCtx)
+	cancel()
+	if refreshErr != nil {
+		log.Printf("placement refresh failed, falling back to bootstrap routing: %v", refreshErr)
 	}
-	defer conn.Close()
+	defer router.Close()
 
-	client := pb.NewKVClient(conn)
 	fmt.Printf("KV CLI started. Target: %s\nType 'help' for commands.\n", *addr)
 
 	scanner := bufio.NewScanner(os.Stdin)
@@ -66,19 +61,18 @@ func main() {
 			if len(parts) < 2 {
 				fmt.Println("usage: get KEY")
 			} else {
-				resp, err := client.Get(ctx, &pb.GetRequest{Key: parts[1]})
+				val, err := router.Get(ctx, parts[1])
 				if err != nil {
 					fmt.Printf("Error: %v\n", err)
 				} else {
-					fmt.Println(string(resp.GetValue()))
+					fmt.Println(string(val))
 				}
 			}
 		case "put":
 			if len(parts) < 3 {
 				fmt.Println("usage: put KEY VALUE")
 			} else {
-				_, err := client.Put(ctx, &pb.PutRequest{Key: parts[1], Value: []byte(parts[2])})
-				if err != nil {
+				if err := router.Put(ctx, parts[1], []byte(parts[2])); err != nil {
 					fmt.Printf("Error: %v\n", err)
 				} else {
 					fmt.Println("OK")
@@ -92,8 +86,7 @@ func main() {
 				if err != nil {
 					fmt.Printf("File error: %v\n", err)
 				} else {
-					_, err = client.Put(ctx, &pb.PutRequest{Key: parts[1], Value: data})
-					if err != nil {
+					if err := router.Put(ctx, parts[1], data); err != nil {
 						fmt.Printf("Error: %v\n", err)
 					} else {
 						fmt.Println("OK")
@@ -104,8 +97,7 @@ func main() {
 			if len(parts) < 2 {
 				fmt.Println("usage: delete KEY")
 			} else {
-				_, err := client.Delete(ctx, &pb.DeleteRequest{Key: parts[1]})
-				if err != nil {
+				if err := router.Delete(ctx, parts[1]); err != nil {
 					fmt.Printf("Error: %v\n", err)
 				} else {
 					fmt.Println("OK")
@@ -114,7 +106,7 @@ func main() {
 		default:
 			fmt.Println("Unknown command. Type 'help'.")
 		}
-		cancel() // Clean up context after each command
+		cancel()
 	}
 
 	if err := scanner.Err(); err != nil && err != io.EOF {
