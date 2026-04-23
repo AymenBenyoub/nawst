@@ -25,6 +25,7 @@ const (
 	KV_Delete_FullMethodName          = "/proto.KV/Delete"
 	KV_Replicate_FullMethodName       = "/proto.KV/Replicate"
 	KV_ReplicateBatch_FullMethodName  = "/proto.KV/ReplicateBatch"
+	KV_ReplicateStream_FullMethodName = "/proto.KV/ReplicateStream"
 	KV_GetClusterState_FullMethodName = "/proto.KV/GetClusterState"
 	KV_StreamKV_FullMethodName        = "/proto.KV/StreamKV"
 	KV_TransferVNode_FullMethodName   = "/proto.KV/TransferVNode"
@@ -39,6 +40,7 @@ type KVClient interface {
 	Delete(ctx context.Context, in *DeleteRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	Replicate(ctx context.Context, in *ReplicationRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
 	ReplicateBatch(ctx context.Context, in *ReplicationBatchRequest, opts ...grpc.CallOption) (*emptypb.Empty, error)
+	ReplicateStream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ReplicationBatchRequest, ReplicationBatchAck], error)
 	GetClusterState(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ClusterState, error)
 	StreamKV(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[StreamReq, StreamResp], error)
 	TransferVNode(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[VNodeTransferReq, VNodeTransferResp], error)
@@ -102,6 +104,19 @@ func (c *kVClient) ReplicateBatch(ctx context.Context, in *ReplicationBatchReque
 	return out, nil
 }
 
+func (c *kVClient) ReplicateStream(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[ReplicationBatchRequest, ReplicationBatchAck], error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	stream, err := c.cc.NewStream(ctx, &KV_ServiceDesc.Streams[0], KV_ReplicateStream_FullMethodName, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	x := &grpc.GenericClientStream[ReplicationBatchRequest, ReplicationBatchAck]{ClientStream: stream}
+	return x, nil
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type KV_ReplicateStreamClient = grpc.BidiStreamingClient[ReplicationBatchRequest, ReplicationBatchAck]
+
 func (c *kVClient) GetClusterState(ctx context.Context, in *emptypb.Empty, opts ...grpc.CallOption) (*ClusterState, error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(ClusterState)
@@ -114,7 +129,7 @@ func (c *kVClient) GetClusterState(ctx context.Context, in *emptypb.Empty, opts 
 
 func (c *kVClient) StreamKV(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[StreamReq, StreamResp], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &KV_ServiceDesc.Streams[0], KV_StreamKV_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &KV_ServiceDesc.Streams[1], KV_StreamKV_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -127,7 +142,7 @@ type KV_StreamKVClient = grpc.BidiStreamingClient[StreamReq, StreamResp]
 
 func (c *kVClient) TransferVNode(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[VNodeTransferReq, VNodeTransferResp], error) {
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
-	stream, err := c.cc.NewStream(ctx, &KV_ServiceDesc.Streams[1], KV_TransferVNode_FullMethodName, cOpts...)
+	stream, err := c.cc.NewStream(ctx, &KV_ServiceDesc.Streams[2], KV_TransferVNode_FullMethodName, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -147,6 +162,7 @@ type KVServer interface {
 	Delete(context.Context, *DeleteRequest) (*emptypb.Empty, error)
 	Replicate(context.Context, *ReplicationRequest) (*emptypb.Empty, error)
 	ReplicateBatch(context.Context, *ReplicationBatchRequest) (*emptypb.Empty, error)
+	ReplicateStream(grpc.BidiStreamingServer[ReplicationBatchRequest, ReplicationBatchAck]) error
 	GetClusterState(context.Context, *emptypb.Empty) (*ClusterState, error)
 	StreamKV(grpc.BidiStreamingServer[StreamReq, StreamResp]) error
 	TransferVNode(grpc.BidiStreamingServer[VNodeTransferReq, VNodeTransferResp]) error
@@ -174,6 +190,9 @@ func (UnimplementedKVServer) Replicate(context.Context, *ReplicationRequest) (*e
 }
 func (UnimplementedKVServer) ReplicateBatch(context.Context, *ReplicationBatchRequest) (*emptypb.Empty, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReplicateBatch not implemented")
+}
+func (UnimplementedKVServer) ReplicateStream(grpc.BidiStreamingServer[ReplicationBatchRequest, ReplicationBatchAck]) error {
+	return status.Error(codes.Unimplemented, "method ReplicateStream not implemented")
 }
 func (UnimplementedKVServer) GetClusterState(context.Context, *emptypb.Empty) (*ClusterState, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetClusterState not implemented")
@@ -295,6 +314,13 @@ func _KV_ReplicateBatch_Handler(srv interface{}, ctx context.Context, dec func(i
 	return interceptor(ctx, in, info, handler)
 }
 
+func _KV_ReplicateStream_Handler(srv interface{}, stream grpc.ServerStream) error {
+	return srv.(KVServer).ReplicateStream(&grpc.GenericServerStream[ReplicationBatchRequest, ReplicationBatchAck]{ServerStream: stream})
+}
+
+// This type alias is provided for backwards compatibility with existing code that references the prior non-generic stream type by name.
+type KV_ReplicateStreamServer = grpc.BidiStreamingServer[ReplicationBatchRequest, ReplicationBatchAck]
+
 func _KV_GetClusterState_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(emptypb.Empty)
 	if err := dec(in); err != nil {
@@ -360,6 +386,12 @@ var KV_ServiceDesc = grpc.ServiceDesc{
 		},
 	},
 	Streams: []grpc.StreamDesc{
+		{
+			StreamName:    "ReplicateStream",
+			Handler:       _KV_ReplicateStream_Handler,
+			ServerStreams: true,
+			ClientStreams: true,
+		},
 		{
 			StreamName:    "StreamKV",
 			Handler:       _KV_StreamKV_Handler,

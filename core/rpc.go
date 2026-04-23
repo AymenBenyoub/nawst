@@ -19,18 +19,14 @@ import (
 	"github.com/AymenBenyoub/nawst/observability"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
-const ForwardedMetadataKey = "x-nawst-forwarded"
-
 type Replicator interface {
 	ReplicateToAll(ctx context.Context, op pb.Op, key string, value []byte, vnodeID uint16, version uint64) error
 	CheckOwnership(key string) (bool, bool, string)
-	ForwardToOwner(ctx context.Context, owner string, req any) ([]byte, error)
 	GetVNodeForKey(key string) uint16 // Returns vnode ID for a key; used to annotate commands
 	GetMigrationSourceForKey(key string) string
 	SnapshotClusterState() *pb.ClusterState
@@ -77,15 +73,6 @@ func (s *Server) debugf(format string, args ...any) {
 	}
 }
 
-func isForwardedRequest(ctx context.Context) bool {
-	md, ok := metadata.FromIncomingContext(ctx)
-	if !ok {
-		return false
-	}
-	vals := md.Get(ForwardedMetadataKey)
-	return len(vals) > 0 && vals[0] == "1"
-}
-
 func (s *Server) Start(port int) error {
 	lis, err := net.Listen("tcp", "0.0.0.0:"+strconv.Itoa(port))
 	if err != nil {
@@ -107,6 +94,13 @@ func (s *Server) Start(port int) error {
 
 	log.Printf("gRPC server listening on address %s\n", lis.Addr())
 	return grpcServer.Serve(lis)
+}
+
+func ownershipError(owner string, replica bool) error {
+	if replica {
+		return status.Errorf(codes.FailedPrecondition, "node is not responsible for key (owner=%s, replica=true)", owner)
+	}
+	return status.Errorf(codes.FailedPrecondition, "node is not responsible for key (owner=%s)", owner)
 }
 
 func (s *Server) sendRequest(ctx context.Context, req Request) Response {
@@ -149,59 +143,50 @@ func (s *Server) Put(ctx context.Context, req *pb.PutRequest) (*emptypb.Empty, e
 	started := time.Now()
 	result := "error"
 	clientResult := "error"
-	countClient := !isForwardedRequest(ctx)
 	defer func() {
 		observability.ObserveRPC("put", result, time.Since(started))
-		if countClient {
-			observability.ObserveClientRequest("put", clientResult)
-		}
+		observability.ObserveClientRequest("put", clientResult)
 	}()
 	s.debugf("[rpc] PUT request key=%q bytes=%d", req.Key, len(req.Value))
-	is_powner, _, owner := s.Replicator.CheckOwnership(req.Key)
-	if !is_powner {
-		_, err := s.Replicator.ForwardToOwner(ctx, owner, req)
-		if err != nil {
-			clientResult = "error"
-			return nil, status.Errorf(codes.Internal, "Failed to forward PUT to owner %s: %v", owner, err)
-		}
-		result = "forwarded"
-		clientResult = "ok"
-		s.debugf("[rpc] PUT key=%q forwarded to owner=%s", req.Key, owner)
-		return &emptypb.Empty{}, nil
-	} else {
-		// Compute vnode and version before sending request to EventLoop.
-		// Vnode is deterministic from key hash; version increments per write.
-		vnodeID := s.Replicator.GetVNodeForKey(req.Key)
-		version := s.NextVersion()
-
-		resp := s.sendRequest(ctx, Request{
-			Op:           OpPut,
-			Key:          req.Key,
-			Value:        req.Value,
-			VNodeID:      vnodeID,
-			Version:      version,
-			ResponseChan: make(chan Response, 1),
-		})
-		if resp.Err != nil {
-			clientResult = "error"
-			return nil, status.Errorf(codes.Internal, "Failed to PUT key: %v", resp.Err)
-		}
-		s.debugf("[rpc] PUT key=%q applied locally", req.Key)
-		if s.Replicator != nil {
-			repCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-			if err := s.Replicator.ReplicateToAll(repCtx, pb.Op_PUT, req.Key, req.Value, vnodeID, version); err != nil {
-				cancel()
-				clientResult = "error"
-				return nil, status.Errorf(codes.Internal, "Failed to replicate PUT: %v", err)
-			}
-
-			cancel()
-		}
-		result = "ok"
-		clientResult = "ok"
-		s.debugf("[rpc] PUT key=%q completed", req.Key)
-		return &emptypb.Empty{}, nil
+	isOwner, _, owner := s.Replicator.CheckOwnership(req.Key)
+	if !isOwner {
+		clientResult = "error"
+		result = "rejected"
+		return nil, ownershipError(owner, false)
 	}
+
+	// Compute vnode and version before sending request to EventLoop.
+	// Vnode is deterministic from key hash; version increments per write.
+	vnodeID := s.Replicator.GetVNodeForKey(req.Key)
+	version := s.NextVersion()
+
+	resp := s.sendRequest(ctx, Request{
+		Op:           OpPut,
+		Key:          req.Key,
+		Value:        req.Value,
+		VNodeID:      vnodeID,
+		Version:      version,
+		ResponseChan: make(chan Response, 1),
+	})
+	if resp.Err != nil {
+		clientResult = "error"
+		return nil, status.Errorf(codes.Internal, "Failed to PUT key: %v", resp.Err)
+	}
+	s.debugf("[rpc] PUT key=%q applied locally", req.Key)
+	if s.Replicator != nil {
+		repCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		if err := s.Replicator.ReplicateToAll(repCtx, pb.Op_PUT, req.Key, req.Value, vnodeID, version); err != nil {
+			cancel()
+			clientResult = "error"
+			return nil, status.Errorf(codes.Internal, "Failed to replicate PUT: %v", err)
+		}
+
+		cancel()
+	}
+	result = "ok"
+	clientResult = "ok"
+	s.debugf("[rpc] PUT key=%q completed", req.Key)
+	return &emptypb.Empty{}, nil
 }
 
 // gRPC Get RPC
@@ -210,60 +195,31 @@ func (s *Server) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, 
 	started := time.Now()
 	result := "error"
 	clientResult := "error"
-	countClient := !isForwardedRequest(ctx)
 	defer func() {
 		observability.ObserveRPC("get", result, time.Since(started))
-		if countClient {
-			observability.ObserveClientRequest("get", clientResult)
-		}
+		observability.ObserveClientRequest("get", clientResult)
 	}()
 	s.debugf("[rpc] GET request key=%q", req.Key)
-	is_powner, is_replica, owner := s.Replicator.CheckOwnership(req.Key)
-	if is_powner || is_replica {
-		val, err := s.Store.Get(req.Key)
-		if err != nil {
-			if errors.Is(err, ErrKeyNotFound) {
-				if src := s.Replicator.GetMigrationSourceForKey(req.Key); src != "" {
-					val, err := s.Replicator.ForwardToOwner(ctx, src, req)
-					if err == nil {
-						observability.IncGetMigrationFallback()
-						result = "fallback-source"
-						clientResult = "ok"
-						s.debugf("[rpc] GET key=%q miss during migration; forwarded to source=%s", req.Key, src)
-						return &pb.GetResponse{Value: val}, nil
-					}
-				}
-				if owner != "" {
-					val, err := s.Replicator.ForwardToOwner(ctx, owner, req)
-					if err != nil {
-						clientResult = "error"
-						return nil, status.Errorf(codes.Internal, "Failed to forward GET to owner %s: %v", owner, err)
-					}
-					s.debugf("[rpc] GET key=%q miss on replica; forwarded to owner=%s", req.Key, owner)
-					result = "fallback-owner"
-					clientResult = "ok"
-					return &pb.GetResponse{Value: val}, nil
-				}
-			}
-			result = "error"
-			clientResult = "error"
-			return nil, status.Errorf(codes.Internal, "Failed to GET key: %v", err)
-		}
-		result = "ok"
-		clientResult = "ok"
-		s.debugf("[rpc] GET key=%q served locally via direct store read", req.Key)
-		return &pb.GetResponse{Value: val}, nil
-	}
-	// not responsible for this key - forward to owner
-	val, err := s.Replicator.ForwardToOwner(ctx, owner, req)
+	val, version, err := s.Store.GetWithVersion(req.Key)
 	if err != nil {
+		if errors.Is(err, ErrKeyNotFound) {
+			result = "not_found"
+			clientResult = "error"
+			return nil, status.Error(codes.NotFound, "key not found")
+		}
+		result = "error"
 		clientResult = "error"
-		return nil, status.Errorf(codes.Internal, "Failed to forward GET to owner %s: %v", owner, err)
+		return nil, status.Errorf(codes.Internal, "Failed to GET key: %v", err)
 	}
-	result = "forwarded"
+	if req.GetMinVersion() > 0 && version < req.GetMinVersion() {
+		result = "stale"
+		clientResult = "error"
+		return nil, status.Errorf(codes.FailedPrecondition, "stale read: local_version=%d min_version=%d", version, req.GetMinVersion())
+	}
+	result = "ok"
 	clientResult = "ok"
-	s.debugf("[rpc] GET key=%q forwarded to owner=%s", req.Key, owner)
-	return &pb.GetResponse{Value: val}, nil
+	s.debugf("[rpc] GET key=%q served locally via direct store read", req.Key)
+	return &pb.GetResponse{Value: val, Version: version}, nil
 }
 
 // gRPC Delete RPC
@@ -271,70 +227,54 @@ func (s *Server) Delete(ctx context.Context, req *pb.DeleteRequest) (*emptypb.Em
 	started := time.Now()
 	result := "error"
 	clientResult := "error"
-	countClient := !isForwardedRequest(ctx)
 	defer func() {
 		observability.ObserveRPC("delete", result, time.Since(started))
-		if countClient {
-			observability.ObserveClientRequest("delete", clientResult)
-		}
+		observability.ObserveClientRequest("delete", clientResult)
 	}()
 	s.debugf("[rpc] DELETE request key=%q", req.Key)
-	is_powner, _, owner := s.Replicator.CheckOwnership(req.Key)
-	if !is_powner {
-		_, err := s.Replicator.ForwardToOwner(ctx, owner, req)
-
-		if err != nil {
-			clientResult = "error"
-			return nil, status.Errorf(codes.Internal, "Failed to forward DELETE to owner %s: %v", owner, err)
-		}
-		result = "forwarded"
-		clientResult = "ok"
-		s.debugf("[rpc] DELETE key=%q forwarded to owner=%s", req.Key, owner)
-		return &emptypb.Empty{}, nil
-	} else {
-		// Compute vnode and version before sending request to EventLoop.
-		vnodeID := s.Replicator.GetVNodeForKey(req.Key)
-		version := s.NextVersion()
-
-		resp := s.sendRequest(ctx, Request{
-			Op:           OpDelete,
-			Key:          req.Key,
-			VNodeID:      vnodeID,
-			Version:      version,
-			ResponseChan: make(chan Response, 1),
-		})
-		if resp.Err != nil {
-			clientResult = "error"
-			return nil, status.Errorf(codes.Internal, "Failed to DELETE key: %v", resp.Err)
-		}
-		s.debugf("[rpc] DELETE key=%q applied locally", req.Key)
-		if s.Replicator != nil {
-
-			repCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-			if err := s.Replicator.ReplicateToAll(repCtx, pb.Op_DELETE, req.Key, nil, vnodeID, version); err != nil {
-				cancel()
-				clientResult = "error"
-				return nil, status.Errorf(codes.Internal, "Failed to REPLICATE DELETE: %v", err)
-			}
-
-			cancel()
-		}
-		result = "ok"
-		clientResult = "ok"
-		s.debugf("[rpc] DELETE key=%q completed", req.Key)
-		return &emptypb.Empty{}, nil
+	isOwner, _, owner := s.Replicator.CheckOwnership(req.Key)
+	if !isOwner {
+		clientResult = "error"
+		result = "rejected"
+		return nil, ownershipError(owner, false)
 	}
+
+	// Compute vnode and version before sending request to EventLoop.
+	vnodeID := s.Replicator.GetVNodeForKey(req.Key)
+	version := s.NextVersion()
+
+	resp := s.sendRequest(ctx, Request{
+		Op:           OpDelete,
+		Key:          req.Key,
+		VNodeID:      vnodeID,
+		Version:      version,
+		ResponseChan: make(chan Response, 1),
+	})
+	if resp.Err != nil {
+		clientResult = "error"
+		return nil, status.Errorf(codes.Internal, "Failed to DELETE key: %v", resp.Err)
+	}
+	s.debugf("[rpc] DELETE key=%q applied locally", req.Key)
+	if s.Replicator != nil {
+
+		repCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		if err := s.Replicator.ReplicateToAll(repCtx, pb.Op_DELETE, req.Key, nil, vnodeID, version); err != nil {
+			cancel()
+			clientResult = "error"
+			return nil, status.Errorf(codes.Internal, "Failed to REPLICATE DELETE: %v", err)
+		}
+
+		cancel()
+	}
+	result = "ok"
+	clientResult = "ok"
+	s.debugf("[rpc] DELETE key=%q completed", req.Key)
+	return &emptypb.Empty{}, nil
 }
 
-func (s *Server) ReplicateBatch(ctx context.Context, req *pb.ReplicationBatchRequest) (*emptypb.Empty, error) {
-	started := time.Now()
-	result := "error"
-	defer func() {
-		observability.ObserveRPC("replicate_batch", result, time.Since(started))
-	}()
+func (s *Server) applyReplicationBatch(ctx context.Context, req *pb.ReplicationBatchRequest) error {
 	if req == nil || len(req.Requests) == 0 {
-		result = "ok"
-		return &emptypb.Empty{}, nil
+		return nil
 	}
 
 	var wg sync.WaitGroup
@@ -370,22 +310,63 @@ func (s *Server) ReplicateBatch(ctx context.Context, req *pb.ReplicationBatchReq
 		}()
 	}
 
-	go func() {
-		wg.Wait()
-		close(errCh)
-	}()
+	wg.Wait()
+	close(errCh)
 
-	var firstErr error
 	for err := range errCh {
-		if err != nil && firstErr == nil {
-			firstErr = err
+		if err != nil {
+			return err
 		}
 	}
-	if firstErr != nil {
-		return nil, status.Errorf(codes.Internal, "replication batch failed: %v", firstErr)
+	return nil
+}
+
+func (s *Server) ReplicateBatch(ctx context.Context, req *pb.ReplicationBatchRequest) (*emptypb.Empty, error) {
+	started := time.Now()
+	result := "error"
+	defer func() {
+		observability.ObserveRPC("replicate_batch", result, time.Since(started))
+	}()
+	if err := s.applyReplicationBatch(ctx, req); err != nil {
+		return nil, status.Errorf(codes.Internal, "replication batch failed: %v", err)
 	}
 	result = "ok"
 	return &emptypb.Empty{}, nil
+}
+
+func (s *Server) ReplicateStream(stream pb.KV_ReplicateStreamServer) error {
+	started := time.Now()
+	result := "error"
+	defer func() {
+		observability.ObserveRPC("replicate_stream", result, time.Since(started))
+	}()
+
+	ctx := stream.Context()
+	for {
+		batch, err := stream.Recv()
+		if err == io.EOF {
+			result = "ok"
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+
+		ack := &pb.ReplicationBatchAck{}
+		if batch != nil {
+			ack.Applied = uint32(len(batch.Requests))
+		}
+		if err := s.applyReplicationBatch(ctx, batch); err != nil {
+			ack.Error = err.Error()
+			if sendErr := stream.Send(ack); sendErr != nil {
+				return sendErr
+			}
+			return status.Errorf(codes.Internal, "replication stream batch failed: %v", err)
+		}
+		if err := stream.Send(ack); err != nil {
+			return err
+		}
+	}
 }
 
 func (s *Server) GetClusterState(ctx context.Context, _ *emptypb.Empty) (*pb.ClusterState, error) {

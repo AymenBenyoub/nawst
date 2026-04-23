@@ -21,7 +21,6 @@ import (
 	"github.com/hashicorp/raft"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -1270,37 +1269,6 @@ func (r *Replicator) ReplicateDelete(ctx context.Context, key string) error {
 	vnodeID := r.GetVNodeForKey(key)
 	return r.ReplicateToAll(ctx, pb.Op_DELETE, key, nil, vnodeID, 0)
 }
-func retryReplication(pid string, c pb.KVClient, req *pb.ReplicationRequest, cctx context.Context) error {
-	const maxAttempts = 3
-	backoff := 500 * time.Millisecond
-
-	var lastErr error
-
-	for attempt := range maxAttempts {
-		select {
-		case <-cctx.Done():
-			return fmt.Errorf("context cancelled while retrying replication to %s: %w", pid, cctx.Err())
-		default:
-		}
-
-		_, err := c.Replicate(cctx, req)
-		if err == nil {
-			return nil
-		}
-		lastErr = err
-
-		if attempt < maxAttempts-1 {
-			select {
-			case <-cctx.Done():
-				return fmt.Errorf("context cancelled while retrying replication to %s: %w", pid, cctx.Err())
-			case <-time.After(backoff):
-			}
-			backoff *= 2
-		}
-	}
-
-	return fmt.Errorf("retry replication to %s exhausted: %w", pid, lastErr)
-}
 func (r *Replicator) CheckOwnership(key string) (bool, bool, string) {
 	pl := r.getPlacement()
 	if pl == nil {
@@ -1530,37 +1498,6 @@ func (r *Replicator) ReconcileRaftWithMembership(members []*memberlist.Node) err
 	return nil
 }
 
-func (r *Replicator) ForwardToOwner(ctx context.Context, owner string, req any) ([]byte, error) {
-	client, err := r.getOrCreateClientByNodeID(owner)
-	var val []byte = nil
-	if err != nil {
-		return nil, err
-	}
-	fwdCtx := metadata.AppendToOutgoingContext(ctx, core.ForwardedMetadataKey, "1")
-	switch req := req.(type) {
-	case *pb.PutRequest:
-		_, err := client.Put(fwdCtx, req)
-		if err != nil {
-			return nil, err
-		}
-
-	case *pb.DeleteRequest:
-		_, err := client.Delete(fwdCtx, req)
-		if err != nil {
-			return nil, err
-		}
-	case *pb.GetRequest:
-		resp, err := client.Get(fwdCtx, req)
-		if err != nil {
-			return nil, err
-		}
-		val = resp.Value
-
-	default:
-		return nil, fmt.Errorf("unsupported request type: %T", req)
-	}
-	return val, nil
-}
 func (r *Replicator) Close() error {
 	r.StopMetricsReporter()
 	r.stopReplicationWorkers()

@@ -4,7 +4,9 @@ stress.exe
 kvcli
 kvserver
 stress
+workload
 kvserver_default
 context.md
 /lab/kathara_cluster/shared/bin/*
 /lab/kathara_cluster/shared/logs/*
+workload

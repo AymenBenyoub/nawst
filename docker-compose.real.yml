@@ -39,14 +39,14 @@ services:
     cpus: "0.80"
     mem_limit: 900m
 
-  client:
-    cpus: "0.30"
-    mem_limit: 256m
+  # client:
+  #   cpus: "0.30"
+  #   mem_limit: 256m
 
-  prometheus:
-    cpus: "0.15"
-    mem_limit: 384m
+  # prometheus:
+  #   cpus: "0.15"
+  #   mem_limit: 384m
 
-  grafana:
-    cpus: "0.15"
-    mem_limit: 384m
+  # grafana:
+  #   cpus: "0.15"
+  #   mem_limit: 384m

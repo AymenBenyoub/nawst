@@ -521,7 +521,7 @@ func main() {
 	router := cluster.NewPlacementRouter(cfg.Addr)
 	refreshCtx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
 	if err := router.Refresh(refreshCtx); err != nil {
-		log.Printf("placement refresh failed, using bootstrap routing until retry: %v", err)
+		log.Printf("placement refresh failed; workload will error until placement is available: %v", err)
 	}
 	cancel()
 	defer router.Close()

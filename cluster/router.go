@@ -8,11 +8,14 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	pb "github.com/AymenBenyoub/nawst/core/proto"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -30,6 +33,8 @@ type PlacementRouter struct {
 	connMu  sync.Mutex
 	conns   map[string]*grpc.ClientConn
 	clients map[string]pb.KVClient
+
+	readCursor atomic.Uint64
 }
 
 func NewPlacementRouter(bootstrapAddr string) *PlacementRouter {
@@ -143,79 +148,144 @@ func vnodeIDForKey(key string) uint16 {
 	return uint16(idx)
 }
 
-func (r *PlacementRouter) ownerForKey(key string) (nodeID string, rpcAddr string, ok bool) {
+type routeTarget struct {
+	nodeID  string
+	rpcAddr string
+}
+
+func (r *PlacementRouter) routeForKey(key string, readAnyNode bool) ([]routeTarget, bool) {
 	state := r.snapshotState()
-	if state == nil || len(state.Vnodes) != VNodeCount {
-		return "", "", false
+	if state == nil {
+		return nil, false
+	}
+
+	if readAnyNode {
+		targets := make([]routeTarget, 0, len(state.Nodes))
+		for _, node := range state.Nodes {
+			rpcAddr := strings.TrimSpace(node.GetRpcAddr())
+			if node.GetId() == "" || rpcAddr == "" {
+				continue
+			}
+			targets = append(targets, routeTarget{nodeID: node.GetId(), rpcAddr: rpcAddr})
+		}
+		if len(targets) == 0 {
+			return nil, false
+		}
+		offset := int(r.readCursor.Add(1) % uint64(len(targets)))
+		rotated := make([]routeTarget, 0, len(targets))
+		rotated = append(rotated, targets[offset:]...)
+		rotated = append(rotated, targets[:offset]...)
+		return rotated, true
+	}
+
+	if len(state.Vnodes) != VNodeCount {
+		return nil, false
 	}
 
 	vnodeID := vnodeIDForKey(key)
 	if int(vnodeID) >= len(state.Vnodes) {
-		return "", "", false
+		return nil, false
 	}
-	owner := state.Vnodes[vnodeID].Primary
+	vnode := state.Vnodes[vnodeID]
+	owner := vnode.Primary
 	if owner == "" {
-		return "", "", false
+		return nil, false
 	}
+
+	addrByNode := make(map[string]string, len(state.Nodes))
 	for _, node := range state.Nodes {
-		if node.GetId() == owner {
-			return owner, node.GetRpcAddr(), true
-		}
+		addrByNode[node.GetId()] = node.GetRpcAddr()
 	}
-	return owner, "", false
+
+	primaryAddr := strings.TrimSpace(addrByNode[owner])
+	if primaryAddr == "" {
+		return nil, false
+	}
+
+	return []routeTarget{{nodeID: owner, rpcAddr: primaryAddr}}, true
 }
 
-func (r *PlacementRouter) clientForKey(key string) (pb.KVClient, string, error) {
-	if nodeID, rpcAddr, ok := r.ownerForKey(key); ok {
-		client, err := r.clientForNode(nodeID, rpcAddr)
-		if err == nil {
-			return client, nodeID, nil
+func (r *PlacementRouter) rpcWithPlacement(ctx context.Context, key string, readAnyNode bool, call func(pb.KVClient) error) error {
+	invoke := func() error {
+		targets, ok := r.routeForKey(key, readAnyNode)
+		if !ok || len(targets) == 0 {
+			return errors.New("placement not ready for key routing")
 		}
-	}
-	client, err := r.bootstrapKVClient()
-	return client, "", err
-}
 
-func (r *PlacementRouter) retryWithRefresh(ctx context.Context, key string, call func(pb.KVClient) error) error {
-	client, _, err := r.clientForKey(key)
-	if err != nil {
-		return err
+		var firstErr error
+		for _, target := range targets {
+			client, err := r.clientForNode(target.nodeID, target.rpcAddr)
+			if err != nil {
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			err = call(client)
+			if err == nil {
+				return nil
+			}
+
+			st, ok := status.FromError(err)
+			if ok && st.Code() == codes.NotFound {
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			if ok && st.Code() == codes.FailedPrecondition {
+				if firstErr == nil {
+					firstErr = err
+				}
+				continue
+			}
+			return err
+		}
+		if firstErr != nil {
+			return firstErr
+		}
+		return errors.New("no route candidates available")
 	}
-	if err := call(client); err == nil {
+
+	if err := invoke(); err == nil {
 		return nil
+	} else {
+		refreshCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
+		_ = r.Refresh(refreshCtx)
+		cancel()
+		return invoke()
 	}
-	refreshCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	_ = r.Refresh(refreshCtx)
-	cancel()
-	client, _, err = r.clientForKey(key)
-	if err != nil {
-		return err
-	}
-	return call(client)
 }
 
-func (r *PlacementRouter) Get(ctx context.Context, key string) ([]byte, error) {
+func (r *PlacementRouter) GetWithMinVersion(ctx context.Context, key string, minVersion uint64) ([]byte, uint64, error) {
 	var value []byte
-	err := r.retryWithRefresh(ctx, key, func(client pb.KVClient) error {
-		resp, err := client.Get(ctx, &pb.GetRequest{Key: key})
+	var version uint64
+	err := r.rpcWithPlacement(ctx, key, true, func(client pb.KVClient) error {
+		resp, err := client.Get(ctx, &pb.GetRequest{Key: key, MinVersion: minVersion})
 		if err != nil {
 			return err
 		}
 		value = append([]byte(nil), resp.GetValue()...)
+		version = resp.GetVersion()
 		return nil
 	})
+	return value, version, err
+}
+
+func (r *PlacementRouter) Get(ctx context.Context, key string) ([]byte, error) {
+	value, _, err := r.GetWithMinVersion(ctx, key, 0)
 	return value, err
 }
 
 func (r *PlacementRouter) Put(ctx context.Context, key string, value []byte) error {
-	return r.retryWithRefresh(ctx, key, func(client pb.KVClient) error {
+	return r.rpcWithPlacement(ctx, key, false, func(client pb.KVClient) error {
 		_, err := client.Put(ctx, &pb.PutRequest{Key: key, Value: value})
 		return err
 	})
 }
 
 func (r *PlacementRouter) Delete(ctx context.Context, key string) error {
-	return r.retryWithRefresh(ctx, key, func(client pb.KVClient) error {
+	return r.rpcWithPlacement(ctx, key, false, func(client pb.KVClient) error {
 		_, err := client.Delete(ctx, &pb.DeleteRequest{Key: key})
 		return err
 	})

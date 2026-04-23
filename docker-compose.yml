@@ -118,51 +118,51 @@ services:
       kvnet:
         ipv4_address: 10.0.0.12
 
-  client:
-    build:
-      context: .
-      dockerfile: docker/compose/Dockerfile
-    container_name: CLIENT
-    depends_on: ["node9999"]
-    entrypoint: ["/bin/sh", "-lc", "sleep infinity"]
-    volumes:
-      - ./:/workspace
-    networks:
-      kvnet:
-        ipv4_address: 10.0.0.100
+  # client:
+  #   build:
+  #     context: .
+  #     dockerfile: docker/compose/Dockerfile
+  #   container_name: CLIENT
+  #   depends_on: ["node9999"]
+  #   entrypoint: ["/bin/sh", "-lc", "sleep infinity"]
+  #   volumes:
+  #     - ./:/workspace
+  #   networks:
+  #     kvnet:
+  #       ipv4_address: 10.0.0.100
 
-  prometheus:
-    image: prom/prometheus:v2.55.1
-    container_name: PROMETHEUS
-    depends_on: ["node9999", "node10000", "node10001", "node10002"]
-    command:
-      - --config.file=/etc/prometheus/prometheus.yml
-      - --storage.tsdb.path=/prometheus
-      - --web.enable-lifecycle
-    volumes:
-      - ./docker/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
-    ports:
-      - "9090:9090"
-    networks:
-      kvnet:
-        ipv4_address: 10.0.0.101
+  # prometheus:
+  #   image: prom/prometheus:v2.55.1
+  #   container_name: PROMETHEUS
+  #   depends_on: ["node9999", "node10000", "node10001", "node10002"]
+  #   command:
+  #     - --config.file=/etc/prometheus/prometheus.yml
+  #     - --storage.tsdb.path=/prometheus
+  #     - --web.enable-lifecycle
+  #   volumes:
+  #     - ./docker/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+  #   ports:
+  #     - "9090:9090"
+  #   networks:
+  #     kvnet:
+  #       ipv4_address: 10.0.0.101
 
-  grafana:
-    image: grafana/grafana:11.3.0
-    container_name: GRAFANA
-    depends_on: ["prometheus"]
-    environment:
-      GF_SECURITY_ADMIN_USER: admin
-      GF_SECURITY_ADMIN_PASSWORD: admin
-      GF_USERS_ALLOW_SIGN_UP: "false"
-    volumes:
-      - ./docker/observability/grafana/provisioning:/etc/grafana/provisioning:ro
-      - ./docker/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
-    ports:
-      - "3000:3000"
-    networks:
-      kvnet:
-        ipv4_address: 10.0.0.102
+  # grafana:
+  #   image: grafana/grafana:11.3.0
+  #   container_name: GRAFANA
+  #   depends_on: ["prometheus"]
+  #   environment:
+  #     GF_SECURITY_ADMIN_USER: admin
+  #     GF_SECURITY_ADMIN_PASSWORD: admin
+  #     GF_USERS_ALLOW_SIGN_UP: "false"
+  #   volumes:
+  #     - ./docker/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+  #     - ./docker/observability/grafana/dashboards:/var/lib/grafana/dashboards:ro
+  #   ports:
+  #     - "3000:3000"
+  #   networks:
+  #     kvnet:
+  #       ipv4_address: 10.0.0.102
 
 networks:
   kvnet:

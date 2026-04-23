@@ -27,7 +27,7 @@ func main() {
 	refreshErr := router.Refresh(refreshCtx)
 	cancel()
 	if refreshErr != nil {
-		log.Printf("placement refresh failed, falling back to bootstrap routing: %v", refreshErr)
+		log.Printf("placement refresh failed; commands will fail until placement is available: %v", refreshErr)
 	}
 	defer router.Close()
 

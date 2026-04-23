@@ -10,6 +10,7 @@ service KV {
     rpc Delete(DeleteRequest) returns (google.protobuf.Empty);
     rpc Replicate(ReplicationRequest) returns (google.protobuf.Empty);
     rpc ReplicateBatch(ReplicationBatchRequest) returns (google.protobuf.Empty);
+    rpc ReplicateStream(stream ReplicationBatchRequest) returns (stream ReplicationBatchAck);
     rpc GetClusterState(google.protobuf.Empty) returns (ClusterState);
     rpc StreamKV(stream StreamReq) returns (stream StreamResp);
     rpc TransferVNode(stream VNodeTransferReq) returns (stream VNodeTransferResp);
@@ -17,11 +18,13 @@ service KV {
 
 message GetRequest {
     string key = 1 ;
+    uint64 min_version = 2;
 }
 
 message GetResponse {
    
     bytes value = 1;
+    uint64 version = 2;
 }
 
 message PutRequest {
@@ -43,6 +46,11 @@ message ReplicationRequest {
 
 message ReplicationBatchRequest {
     repeated ReplicationRequest requests = 1;
+}
+
+message ReplicationBatchAck {
+    uint32 applied = 1;
+    string error = 2;
 }
 
 message ClusterNode {

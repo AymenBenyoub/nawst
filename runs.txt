@@ -1,0 +1,98 @@
+balanced: ./workload \
+  -addr 127.0.0.1:9999 \
+  -clients 120 -conns 32 \
+  -valuesize 512 \
+  -keyspace 300000 -prefill 120000 \
+  -dist zipf -zipf-s 1.10 -zipf-v 1.0 \
+  -read-pct 80 -write-pct 15 -delete-pct 5 \
+  -warmup 30s -duration 8m \
+  -progress 5s
+  
+write heavy:./workload \
+  -addr 127.0.0.1:9999 \
+  -clients 180 -conns 48 \
+  -valuesize 1024 \
+  -keyspace 350000 -prefill 180000 \
+  -dist zipf -zipf-s 1.15 \
+  -read-pct 55 -write-pct 40 -delete-pct 5 \
+  -warmup 45s -duration 10m \
+  -progress 5s
+  
+read heavy:
+./workload \
+  -addr 127.0.0.1:9999 \
+  -clients 100 -conns 24 \
+  -valuesize 256 \
+  -keyspace 250000 -prefill 150000 \
+  -dist zipf -zipf-s 1.05 \
+  -read-pct 95 -write-pct 4 -delete-pct 1 \
+  -warmup 20s -duration 6m
+ 
+uniform:./workload \
+  -addr 127.0.0.1:9999 \
+  -clients 140 -conns 40 \
+  -valuesize 512 \
+  -keyspace 500000 -prefill 200000 \
+  -dist uniform \
+  -read-pct 75 -write-pct 20 -delete-pct 5 \
+  -warmup 30s -duration 8m
+  
+latest:
+./workload \
+  -addr 127.0.0.1:9999 \
+  -clients 140 -conns 40 \
+  -valuesize 512 \
+  -keyspace 280000 -prefill 120000 \
+  -dist latest \
+  -read-pct 70 -write-pct 25 -delete-pct 5 \
+  -warmup 30s -duration 8m
+ 
+ 
+reproducible (fixed seed) : ./workload \
+  -addr 127.0.0.1:9999 \
+  -clients 128 -conns 32 \
+  -valuesize 512 \
+  -keyspace 300000 -prefill 120000 \
+  -dist zipf -zipf-s 1.10 \
+  -read-pct 80 -write-pct 15 -delete-pct 5 \
+  -warmup 30s -duration 8m \
+  -seed 42
+ 
+ 
+ rate capped; ./workload \
+  -addr 127.0.0.1:9999 \
+  -clients 160 -conns 40 \
+  -valuesize 512 \
+  -keyspace 300000 -prefill 120000 \
+  -dist zipf -zipf-s 1.12 \
+  -read-pct 80 -write-pct 15 -delete-pct 5 \
+  -target-ops 12000 \
+  -warmup 30s -duration 10m
+  
+  
+  large vals: ./workload \
+  -addr 127.0.0.1:9999 \
+  -clients 100 -conns 30 \
+  -valuesize 4096 \
+  -keyspace 220000 -prefill 100000 \
+  -dist zipf -zipf-s 1.10 \
+  -read-pct 75 -write-pct 20 -delete-pct 5 \
+  -warmup 30s -duration 8m
+  
+  put only: ./workload \
+  -addr 127.0.0.1:9999 \
+  -clients 200 -conns 50 \
+  -valuesize 1024 \
+  -keyspace 400000 -prefill 0 \
+  -putonly \
+  -warmup 15s -duration 6m
+  
+  quick : ./workload \
+  -addr 127.0.0.1:9999 \
+  -clients 64 -conns 16 \
+  -valuesize 256 \
+  -keyspace 100000 -prefill 30000 \
+  -dist zipf -zipf-s 1.1 \
+  -read-pct 80 -write-pct 15 -delete-pct 5 \
+  -warmup 10s -duration 2m
+  

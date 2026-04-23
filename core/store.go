@@ -139,6 +139,12 @@ func (s *Store) Apply(cmd Command) error {
 
 // Get retrieves a key (read-only, no vnode index change).
 func (s *Store) Get(key string) ([]byte, error) {
+	val, _, err := s.GetWithVersion(key)
+	return val, err
+}
+
+// GetWithVersion returns value and logical version for stale-read detection.
+func (s *Store) GetWithVersion(key string) ([]byte, uint64, error) {
 	started := time.Now()
 	s.vNodeMu.RLock()
 	val, exists := s.storage[key]
@@ -147,11 +153,11 @@ func (s *Store) Get(key string) ([]byte, error) {
 
 	if !exists || meta.Tombstone {
 		observability.ObserveStoreGet("miss", time.Since(started))
-		return nil, ErrKeyNotFound
+		return nil, 0, ErrKeyNotFound
 	}
 
 	observability.ObserveStoreGet("hit", time.Since(started))
-	return slices.Clone(val), nil
+	return slices.Clone(val), meta.Version, nil
 }
 
 // GetKeysForVNode returns all keys owned by a vnode (for migration/snapshot).
