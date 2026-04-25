@@ -272,52 +272,87 @@ func (s *Server) Delete(ctx context.Context, req *pb.DeleteRequest) (*emptypb.Em
 	return &emptypb.Empty{}, nil
 }
 
+// func (s *Server) applyReplicationBatch(ctx context.Context, req *pb.ReplicationBatchRequest) error {
+// 	if req == nil || len(req.Requests) == 0 {
+// 		return nil
+// 	}
+
+// 	var wg sync.WaitGroup
+// 	errCh := make(chan error, len(req.Requests))
+// 	for _, item := range req.Requests {
+// 		if item == nil {
+// 			continue
+// 		}
+// 		item := item
+// 		wg.Add(1)
+// 		go func() {
+// 			defer wg.Done()
+// 			resp := s.sendRequest(ctx, Request{
+// 				Op: func() OpType {
+// 					switch item.Op {
+// 					case pb.Op_PUT:
+// 						return OpPut
+// 					case pb.Op_DELETE:
+// 						return OpDelete
+// 					default:
+// 						return OpGet
+// 					}
+// 				}(),
+// 				Key:          item.Key,
+// 				Value:        item.Value,
+// 				VNodeID:      uint16(item.VnodeId),
+// 				Version:      item.Version,
+// 				ResponseChan: make(chan Response, 1),
+// 			})
+// 			if resp.Err != nil {
+// 				errCh <- resp.Err
+// 			}
+// 		}()
+// 	}
+
+// 	wg.Wait()
+// 	close(errCh)
+
+//		for err := range errCh {
+//			if err != nil {
+//				return err
+//			}
+//		}
+//		return nil
+//	}
 func (s *Server) applyReplicationBatch(ctx context.Context, req *pb.ReplicationBatchRequest) error {
 	if req == nil || len(req.Requests) == 0 {
 		return nil
 	}
 
-	var wg sync.WaitGroup
-	errCh := make(chan error, len(req.Requests))
 	for _, item := range req.Requests {
 		if item == nil {
 			continue
 		}
-		item := item
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
-			resp := s.sendRequest(ctx, Request{
-				Op: func() OpType {
-					switch item.Op {
-					case pb.Op_PUT:
-						return OpPut
-					case pb.Op_DELETE:
-						return OpDelete
-					default:
-						return OpGet
-					}
-				}(),
-				Key:          item.Key,
-				Value:        item.Value,
-				VNodeID:      uint16(item.VnodeId),
-				Version:      item.Version,
-				ResponseChan: make(chan Response, 1),
-			})
-			if resp.Err != nil {
-				errCh <- resp.Err
-			}
-		}()
-	}
 
-	wg.Wait()
-	close(errCh)
+		resp := s.sendRequest(ctx, Request{
+			Op: func() OpType {
+				switch item.Op {
+				case pb.Op_PUT:
+					return OpPut
+				case pb.Op_DELETE:
+					return OpDelete
+				default:
+					return OpGet
+				}
+			}(),
+			Key:          item.Key,
+			Value:        item.Value,
+			VNodeID:      uint16(item.VnodeId),
+			Version:      item.Version,
+			ResponseChan: make(chan Response, 1),
+		})
 
-	for err := range errCh {
-		if err != nil {
-			return err
+		if resp.Err != nil {
+			return resp.Err
 		}
 	}
+
 	return nil
 }
 

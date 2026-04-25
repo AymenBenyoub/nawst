@@ -32,16 +32,21 @@ type PlacementRouter struct {
 
 	connMu  sync.Mutex
 	conns   map[string]*grpc.ClientConn
-	clients map[string]pb.KVClient
+	clients map[string]*clientPool
 
 	readCursor atomic.Uint64
+}
+type clientPool struct {
+	conns   []*grpc.ClientConn
+	clients []pb.KVClient
+	next    atomic.Uint64
 }
 
 func NewPlacementRouter(bootstrapAddr string) *PlacementRouter {
 	return &PlacementRouter{
 		bootstrapAddr: strings.TrimSpace(bootstrapAddr),
 		conns:         make(map[string]*grpc.ClientConn),
-		clients:       make(map[string]pb.KVClient),
+		clients:       make(map[string]*clientPool),
 	}
 }
 
@@ -113,27 +118,46 @@ func (r *PlacementRouter) clientForNode(nodeID, rpcAddr string) (pb.KVClient, er
 	}
 
 	r.connMu.Lock()
-	if client, ok := r.clients[nodeID]; ok {
-		r.connMu.Unlock()
-		return client, nil
-	}
+	pool, ok := r.clients[nodeID]
 	r.connMu.Unlock()
 
-	conn, err := grpc.NewClient(rpcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		return nil, err
+	if ok {
+		idx := int(pool.next.Add(1) % uint64(len(pool.clients)))
+		return pool.clients[idx], nil
 	}
-	client := pb.NewKVClient(conn)
+
+	// create pool
+	const poolSize = 4
+
+	conns := make([]*grpc.ClientConn, 0, poolSize)
+	clients := make([]pb.KVClient, 0, poolSize)
+
+	for i := 0; i < poolSize; i++ {
+		conn, err := grpc.NewClient(
+			rpcAddr,
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+			grpc.WithDefaultCallOptions(
+				grpc.MaxCallRecvMsgSize(16<<20),
+				grpc.MaxCallSendMsgSize(16<<20),
+			),
+		)
+		if err != nil {
+			return nil, err
+		}
+		conns = append(conns, conn)
+		clients = append(clients, pb.NewKVClient(conn))
+	}
+
+	pool = &clientPool{
+		conns:   conns,
+		clients: clients,
+	}
 
 	r.connMu.Lock()
-	defer r.connMu.Unlock()
-	if existing, ok := r.clients[nodeID]; ok {
-		_ = conn.Close()
-		return existing, nil
-	}
-	r.conns[nodeID] = conn
-	r.clients[nodeID] = client
-	return client, nil
+	r.clients[nodeID] = pool
+	r.connMu.Unlock()
+
+	return clients[0], nil
 }
 
 func (r *PlacementRouter) snapshotState() *pb.ClusterState {
@@ -159,25 +183,6 @@ func (r *PlacementRouter) routeForKey(key string, readAnyNode bool) ([]routeTarg
 		return nil, false
 	}
 
-	if readAnyNode {
-		targets := make([]routeTarget, 0, len(state.Nodes))
-		for _, node := range state.Nodes {
-			rpcAddr := strings.TrimSpace(node.GetRpcAddr())
-			if node.GetId() == "" || rpcAddr == "" {
-				continue
-			}
-			targets = append(targets, routeTarget{nodeID: node.GetId(), rpcAddr: rpcAddr})
-		}
-		if len(targets) == 0 {
-			return nil, false
-		}
-		offset := int(r.readCursor.Add(1) % uint64(len(targets)))
-		rotated := make([]routeTarget, 0, len(targets))
-		rotated = append(rotated, targets[offset:]...)
-		rotated = append(rotated, targets[:offset]...)
-		return rotated, true
-	}
-
 	if len(state.Vnodes) != VNodeCount {
 		return nil, false
 	}
@@ -186,23 +191,77 @@ func (r *PlacementRouter) routeForKey(key string, readAnyNode bool) ([]routeTarg
 	if int(vnodeID) >= len(state.Vnodes) {
 		return nil, false
 	}
+
 	vnode := state.Vnodes[vnodeID]
-	owner := vnode.Primary
-	if owner == "" {
+	if vnode.Primary == "" {
 		return nil, false
 	}
 
+	// Build nodeID -> addr map
 	addrByNode := make(map[string]string, len(state.Nodes))
 	for _, node := range state.Nodes {
-		addrByNode[node.GetId()] = node.GetRpcAddr()
+		addrByNode[node.GetId()] = strings.TrimSpace(node.GetRpcAddr())
 	}
 
-	primaryAddr := strings.TrimSpace(addrByNode[owner])
-	if primaryAddr == "" {
-		return nil, false
+	// Always include primary first
+	targets := make([]routeTarget, 0, 1+len(vnode.Replicas))
+
+	if addr := addrByNode[vnode.Primary]; addr != "" {
+		targets = append(targets, routeTarget{
+			nodeID:  vnode.Primary,
+			rpcAddr: addr,
+		})
 	}
 
-	return []routeTarget{{nodeID: owner, rpcAddr: primaryAddr}}, true
+	// If readAnyNode → include replicas
+	if readAnyNode {
+		for _, replica := range vnode.Replicas {
+			if addr := addrByNode[replica]; addr != "" {
+				targets = append(targets, routeTarget{
+					nodeID:  replica,
+					rpcAddr: addr,
+				})
+			}
+		}
+
+		// rotate for load balancing
+		if len(targets) > 1 {
+			offset := int(r.readCursor.Add(1) % uint64(len(targets)))
+			rotated := make([]routeTarget, 0, len(targets))
+			rotated = append(rotated, targets[offset:]...)
+			rotated = append(rotated, targets[:offset]...)
+			return rotated, true
+		}
+	}
+
+	// 	if readAnyNode {
+	//     vnodeID := vnodeIDForKey(key)
+	//     vnode := state.Vnodes[vnodeID]
+
+	//     candidates := make([]routeTarget, 0, 1+len(vnode.Replicas))
+
+	//     addrByNode := make(map[string]string)
+	//     for _, n := range state.Nodes {
+	//         addrByNode[n.Id] = n.RpcAddr
+	//     }
+
+	//     if addr := addrByNode[vnode.Primary]; addr != "" {
+	//         candidates = append(candidates, routeTarget{vnode.Primary, addr})
+	//     }
+
+	//     for _, rID := range vnode.Replicas {
+	//         if addr := addrByNode[rID]; addr != "" {
+	//             candidates = append(candidates, routeTarget{rID, addr})
+	//         }
+	//     }
+
+	//     if len(candidates) == 0 {
+	//         return nil, false
+	//     }
+
+	//     return candidates, true
+	// }
+	return targets, true
 }
 
 func (r *PlacementRouter) rpcWithPlacement(ctx context.Context, key string, readAnyNode bool, call func(pb.KVClient) error) error {
@@ -227,17 +286,26 @@ func (r *PlacementRouter) rpcWithPlacement(ctx context.Context, key string, read
 			}
 
 			st, ok := status.FromError(err)
-			if ok && st.Code() == codes.NotFound {
-				if firstErr == nil {
-					firstErr = err
+			if ok {
+				switch st.Code() {
+				case codes.Unavailable, codes.DeadlineExceeded:
+					// retry other nodes
+					if firstErr == nil {
+						firstErr = err
+					}
+					continue
+
+				case codes.NotFound:
+					// valid result → key doesn't exist
+					return err
+
+				case codes.FailedPrecondition:
+					// stale routing → trigger refresh
+					if firstErr == nil {
+						firstErr = err
+					}
+					continue
 				}
-				continue
-			}
-			if ok && st.Code() == codes.FailedPrecondition {
-				if firstErr == nil {
-					firstErr = err
-				}
-				continue
 			}
 			return err
 		}

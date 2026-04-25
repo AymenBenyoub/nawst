@@ -564,7 +564,7 @@ func (r *Replicator) UpdatePlacement() {
 
 		// Calculate total drift
 
-		primaryThreshold := (VNodeCount * 5) / 100
+		primaryThreshold := (VNodeCount * 12) / 100
 		replicaThreshold := (VNodeCount * (r.ReplicationFactor - 1) * 20) / 100
 
 		if movedPrimaryCount < primaryThreshold && movedReplicaCount < replicaThreshold {
