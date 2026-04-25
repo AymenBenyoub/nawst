@@ -34,6 +34,9 @@ type Store struct {
 
 	tombstoneCount int
 	valueBytes     int64
+
+	vnodesWithData       int
+	vnodesWithTombstones int
 }
 
 type keyMeta struct {
@@ -51,19 +54,7 @@ func NewStore() *Store {
 }
 
 func (s *Store) updateStateMetricsLocked() {
-	vnodesWithData := 0
-	for _, set := range s.vNodeIdx {
-		if len(set) > 0 {
-			vnodesWithData++
-		}
-	}
-	vnodesWithTombstones := 0
-	for _, set := range s.tombstoneIdx {
-		if len(set) > 0 {
-			vnodesWithTombstones++
-		}
-	}
-	observability.SetStoreState(len(s.storage), s.tombstoneCount, s.valueBytes, vnodesWithData, vnodesWithTombstones)
+	observability.SetStoreState(len(s.storage), s.tombstoneCount, s.valueBytes, s.vnodesWithData, s.vnodesWithTombstones)
 }
 
 // Apply executes a command and updates vnode index.
@@ -97,9 +88,19 @@ func (s *Store) Apply(cmd Command) error {
 		if s.vNodeIdx[cmd.VNodeID] == nil {
 			s.vNodeIdx[cmd.VNodeID] = make(map[string]bool)
 		}
+		dataSet := s.vNodeIdx[cmd.VNodeID]
+		dataLenBefore := len(dataSet)
 		s.vNodeIdx[cmd.VNodeID][cmd.Key] = true
+		if dataLenBefore == 0 {
+			s.vnodesWithData++
+		}
 		if ts, ok := s.tombstoneIdx[cmd.VNodeID]; ok {
-			delete(ts, cmd.Key)
+			if _, had := ts[cmd.Key]; had {
+				delete(ts, cmd.Key)
+				if len(ts) == 0 && s.vnodesWithTombstones > 0 {
+					s.vnodesWithTombstones--
+				}
+			}
 		}
 		if curMeta.Tombstone {
 			s.tombstoneCount--
@@ -117,12 +118,22 @@ func (s *Store) Apply(cmd Command) error {
 
 		// 2. Deregister from vnode index (fast, O(1) set delete).
 		if idx, ok := s.vNodeIdx[cmd.VNodeID]; ok {
-			delete(idx, cmd.Key)
+			if _, had := idx[cmd.Key]; had {
+				delete(idx, cmd.Key)
+				if len(idx) == 0 && s.vnodesWithData > 0 {
+					s.vnodesWithData--
+				}
+			}
 		}
 		if s.tombstoneIdx[cmd.VNodeID] == nil {
 			s.tombstoneIdx[cmd.VNodeID] = make(map[string]bool)
 		}
-		s.tombstoneIdx[cmd.VNodeID][cmd.Key] = true
+		ts := s.tombstoneIdx[cmd.VNodeID]
+		tsLenBefore := len(ts)
+		ts[cmd.Key] = true
+		if tsLenBefore == 0 {
+			s.vnodesWithTombstones++
+		}
 		if !curMeta.Tombstone {
 			s.tombstoneCount++
 		}
@@ -254,8 +265,9 @@ func (s *Store) DeleteVNodeData(vnodeID uint16) {
 	s.vNodeMu.Lock()
 	defer s.vNodeMu.Unlock()
 
-	indexSet, ok := s.vNodeIdx[vnodeID]
-	if !ok {
+	indexSet := s.vNodeIdx[vnodeID]
+	tsSet := s.tombstoneIdx[vnodeID]
+	if len(indexSet) == 0 && len(tsSet) == 0 {
 		return
 	}
 
@@ -264,7 +276,7 @@ func (s *Store) DeleteVNodeData(vnodeID uint16) {
 		delete(s.storage, key)
 		delete(s.meta, key)
 	}
-	for key := range s.tombstoneIdx[vnodeID] {
+	for key := range tsSet {
 		if s.tombstoneCount > 0 {
 			s.tombstoneCount--
 		}
@@ -272,6 +284,12 @@ func (s *Store) DeleteVNodeData(vnodeID uint16) {
 	}
 
 	// Clear the vnode entry from index.
+	if len(indexSet) > 0 && s.vnodesWithData > 0 {
+		s.vnodesWithData--
+	}
+	if len(tsSet) > 0 && s.vnodesWithTombstones > 0 {
+		s.vnodesWithTombstones--
+	}
 	delete(s.vNodeIdx, vnodeID)
 	delete(s.tombstoneIdx, vnodeID)
 	s.updateStateMetricsLocked()
