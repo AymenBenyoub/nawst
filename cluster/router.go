@@ -22,6 +22,7 @@ import (
 // PlacementRouter routes client traffic directly to the current vnode primary.
 type PlacementRouter struct {
 	bootstrapAddr string
+	poolSize      int
 
 	mu    sync.RWMutex
 	state *pb.ClusterState
@@ -31,7 +32,6 @@ type PlacementRouter struct {
 	bootstrapClient pb.KVClient
 
 	connMu  sync.Mutex
-	conns   map[string]*grpc.ClientConn
 	clients map[string]*clientPool
 
 	readCursor atomic.Uint64
@@ -43,9 +43,16 @@ type clientPool struct {
 }
 
 func NewPlacementRouter(bootstrapAddr string) *PlacementRouter {
+	return NewPlacementRouterWithPoolSize(bootstrapAddr, 4)
+}
+
+func NewPlacementRouterWithPoolSize(bootstrapAddr string, poolSize int) *PlacementRouter {
+	if poolSize <= 0 {
+		poolSize = 1
+	}
 	return &PlacementRouter{
 		bootstrapAddr: strings.TrimSpace(bootstrapAddr),
-		conns:         make(map[string]*grpc.ClientConn),
+		poolSize:      poolSize,
 		clients:       make(map[string]*clientPool),
 	}
 }
@@ -62,14 +69,19 @@ func (r *PlacementRouter) Close() error {
 		r.bootstrapConn = nil
 		r.bootstrapClient = nil
 	}
-	for nodeID, conn := range r.conns {
-		if conn == nil {
+	for nodeID, pool := range r.clients {
+		if pool == nil {
+			delete(r.clients, nodeID)
 			continue
 		}
-		if err := conn.Close(); err != nil && firstErr == nil {
-			firstErr = fmt.Errorf("close connection to %s: %w", nodeID, err)
+		for _, conn := range pool.conns {
+			if conn == nil {
+				continue
+			}
+			if err := conn.Close(); err != nil && firstErr == nil {
+				firstErr = fmt.Errorf("close connection to %s: %w", nodeID, err)
+			}
 		}
-		delete(r.conns, nodeID)
 		delete(r.clients, nodeID)
 	}
 	return firstErr
@@ -127,7 +139,7 @@ func (r *PlacementRouter) clientForNode(nodeID, rpcAddr string) (pb.KVClient, er
 	}
 
 	// create pool
-	const poolSize = 4
+	poolSize := r.poolSize
 
 	conns := make([]*grpc.ClientConn, 0, poolSize)
 	clients := make([]pb.KVClient, 0, poolSize)

@@ -518,7 +518,7 @@ func parseFlags() LoadConfig {
 func main() {
 	cfg := parseFlags()
 
-	router := cluster.NewPlacementRouter(cfg.Addr)
+	router := cluster.NewPlacementRouterWithPoolSize(cfg.Addr, cfg.Conns)
 	refreshCtx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
 	if err := router.Refresh(refreshCtx); err != nil {
 		log.Printf("placement refresh failed; workload will error until placement is available: %v", err)
