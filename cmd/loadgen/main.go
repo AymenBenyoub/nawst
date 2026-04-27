@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"github.com/AymenBenyoub/nawst/cluster"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 type LoadConfig struct {
@@ -225,6 +227,10 @@ func doOp(ctx context.Context, router *cluster.PlacementRouter, op operation, ke
 		return router.Put(ctx, key, value)
 	case opGet:
 		_, err := router.Get(ctx, key)
+		if err != nil && status.Code(err) == codes.NotFound {
+			// A miss is still a completed GET operation, not an infrastructure failure.
+			return nil
+		}
 		return err
 	default:
 		return router.Delete(ctx, key)
