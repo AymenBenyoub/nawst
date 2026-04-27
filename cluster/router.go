@@ -14,7 +14,7 @@ import (
 	pb "github.com/AymenBenyoub/nawst/core/proto"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
@@ -23,6 +23,7 @@ import (
 type PlacementRouter struct {
 	bootstrapAddr string
 	poolSize      int
+	tlsConfig     ClientTLSConfig
 
 	mu    sync.RWMutex
 	state *pb.ClusterState
@@ -35,6 +36,9 @@ type PlacementRouter struct {
 	clients map[string]*clientPool
 
 	readCursor atomic.Uint64
+
+	credsMu        sync.RWMutex
+	transportCreds credentials.TransportCredentials
 }
 type clientPool struct {
 	conns   []*grpc.ClientConn
@@ -50,11 +54,33 @@ func NewPlacementRouterWithPoolSize(bootstrapAddr string, poolSize int) *Placeme
 	if poolSize <= 0 {
 		poolSize = 1
 	}
+	creds, _ := BuildClientTransportCredentials(ClientTLSConfig{Enabled: false})
 	return &PlacementRouter{
-		bootstrapAddr: strings.TrimSpace(bootstrapAddr),
-		poolSize:      poolSize,
-		clients:       make(map[string]*clientPool),
+		bootstrapAddr:  strings.TrimSpace(bootstrapAddr),
+		poolSize:       poolSize,
+		clients:        make(map[string]*clientPool),
+		transportCreds: creds,
 	}
+}
+
+func (r *PlacementRouter) ConfigureTLS(cfg ClientTLSConfig) error {
+	creds, err := BuildClientTransportCredentials(cfg)
+	if err != nil {
+		return err
+	}
+
+	r.credsMu.Lock()
+	r.tlsConfig = cfg
+	r.transportCreds = creds
+	r.credsMu.Unlock()
+
+	return nil
+}
+
+func (r *PlacementRouter) dialCreds() credentials.TransportCredentials {
+	r.credsMu.RLock()
+	defer r.credsMu.RUnlock()
+	return r.transportCreds
 }
 
 func (r *PlacementRouter) Close() error {
@@ -113,7 +139,7 @@ func (r *PlacementRouter) bootstrapKVClient() (pb.KVClient, error) {
 		return nil, errors.New("bootstrap address is empty")
 	}
 
-	conn, err := grpc.NewClient(r.bootstrapAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(r.bootstrapAddr, grpc.WithTransportCredentials(r.dialCreds()))
 	if err != nil {
 		return nil, err
 	}
@@ -147,7 +173,7 @@ func (r *PlacementRouter) clientForNode(nodeID, rpcAddr string) (pb.KVClient, er
 	for i := 0; i < poolSize; i++ {
 		conn, err := grpc.NewClient(
 			rpcAddr,
-			grpc.WithTransportCredentials(insecure.NewCredentials()),
+			grpc.WithTransportCredentials(r.dialCreds()),
 			grpc.WithDefaultCallOptions(
 				grpc.MaxCallRecvMsgSize(16<<20),
 				grpc.MaxCallSendMsgSize(16<<20),

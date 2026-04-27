@@ -2,7 +2,7 @@ services:
   node9999:
     environment:
       ENABLE_TC: "1"
-      ACK: "0"
+      ACK: "1"
       METRICS_INTERVAL: "10s"
       BANDWIDTH_MBPS: "1000"
       TC_RULES: "10.0.0.10,2gbit,0.35ms;10.0.0.11,2gbit,0.45ms;10.0.0.12,2gbit,0.55ms"
@@ -12,7 +12,7 @@ services:
   node10000:
     environment:
       ENABLE_TC: "1"
-      ACK: "0"
+      ACK: "1"
       METRICS_INTERVAL: "10s"
       BANDWIDTH_MBPS: "1000"
       TC_RULES: "10.0.0.9,2gbit,0.35ms;10.0.0.11,2gbit,0.35ms;10.0.0.12,2gbit,0.45ms"
@@ -22,7 +22,7 @@ services:
   node10001:
     environment:
       ENABLE_TC: "1"
-      ACK: "0"
+      ACK: "1"
       METRICS_INTERVAL: "10s"
       BANDWIDTH_MBPS: "1000"
       TC_RULES: "10.0.0.9,2gbit,0.45ms;10.0.0.10,2gbit,0.35ms;10.0.0.12,2gbit,0.35ms"
@@ -32,7 +32,7 @@ services:
   node10002:
     environment:
       ENABLE_TC: "1"
-      ACK: "0"
+      ACK: "1"
       METRICS_INTERVAL: "10s"
       BANDWIDTH_MBPS: "1000"
       TC_RULES: "10.0.0.9,2gbit,0.55ms;10.0.0.10,2gbit,0.45ms;10.0.0.11,2gbit,0.35ms"

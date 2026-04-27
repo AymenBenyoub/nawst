@@ -13,7 +13,7 @@ METRICS_BIND_ADDR="${METRICS_BIND_ADDR:-0.0.0.0}"
 METRICS_PORT="${METRICS_PORT:-$((RPC_PORT + 2000))}"
 RF="${RF:-3}"
 ACK="${ACK:-1}"
-ENABLE_TC="${ENABLE_TC:-0}"
+ENABLE_TC="${ENABLE_TC:-1}"
 DISK_PATH="${DISK_PATH:-/data}"
 
 if [[ ! -x /workspace/kvserver ]]; then

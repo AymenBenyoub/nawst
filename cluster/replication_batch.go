@@ -225,9 +225,9 @@ import (
 )
 
 const (
-	replicationBatchSize   = 64
-	replicationBatchWindow = 2 * time.Millisecond
-	maxInFlightBatches     = 128
+	replicationBatchSize   = 256
+	replicationBatchWindow = 1 * time.Millisecond
+	maxInFlightBatches     = 256
 )
 
 type replicationTask struct {
@@ -251,7 +251,7 @@ func newReplicationBatchWorker(nodeID string, client pb.KVClient) *replicationBa
 	w := &replicationBatchWorker{
 		nodeID:  nodeID,
 		client:  client,
-		enqueue: make(chan replicationTask, 4096),
+		enqueue: make(chan replicationTask, 16384),
 		stopCh:  make(chan struct{}),
 	}
 	go w.run()

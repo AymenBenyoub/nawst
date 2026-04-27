@@ -38,6 +38,12 @@ func main() {
 	var rpcVerbose = flag.Bool("rpc-verbose", false, "enable verbose per-request rpc/replication logging")
 	var metricsBindAddr = flag.String("metrics-bind-addr", "0.0.0.0", "metrics http bind address")
 	var metricsPort = flag.Int("metrics-port", 0, "metrics http port (default rpc-port+2000)")
+	var rpcTLSEnable = flag.Bool("rpc-tls-enable", false, "enable TLS on gRPC server and inter-node gRPC clients")
+	var rpcTLSCertFile = flag.String("rpc-tls-cert-file", "", "path to server TLS certificate PEM")
+	var rpcTLSKeyFile = flag.String("rpc-tls-key-file", "", "path to server TLS private key PEM")
+	var rpcTLSCACertFile = flag.String("rpc-tls-ca-cert-file", "", "path to CA certificate PEM used for outbound gRPC verification")
+	var rpcTLSServerName = flag.String("rpc-tls-server-name", "", "TLS server name for outbound gRPC verification")
+	var rpcTLSInsecureSkipVerify = flag.Bool("rpc-tls-insecure-skip-verify", false, "skip TLS cert hostname/chain verification for outbound gRPC (not recommended)")
 	flag.Parse()
 	const writerBufferSize = 64 * 1024
 	const requestChannelSize = 10000
@@ -88,6 +94,12 @@ func main() {
 
 	server := core.NewServer(reqCh, store)
 	server.SetRPCVerbose(*rpcVerbose)
+	if *rpcTLSEnable {
+		if *rpcTLSCertFile == "" || *rpcTLSKeyFile == "" {
+			log.Fatal("rpc TLS enabled but cert/key files are missing")
+		}
+		server.SetTLS(*rpcTLSCertFile, *rpcTLSKeyFile)
+	}
 	resolvedMetricsPort := *metricsPort
 	if resolvedMetricsPort == 0 {
 		resolvedMetricsPort = *rpc_port + 2000
@@ -124,6 +136,14 @@ func main() {
 		panic(err)
 	}
 	replicator := cluster.NewReplicator(nodeID, Node.Ml, *replicationFactor)
+	if err := replicator.ConfigureClientTLS(cluster.ClientTLSConfig{
+		Enabled:            *rpcTLSEnable,
+		CACertFile:         *rpcTLSCACertFile,
+		ServerName:         *rpcTLSServerName,
+		InsecureSkipVerify: *rpcTLSInsecureSkipVerify,
+	}); err != nil {
+		log.Fatalf("invalid outbound TLS config: %v", err)
+	}
 	replicator.SetVerbose(*rpcVerbose)
 	replicator.SetTransferApplier(func(cmd core.Command) error {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)

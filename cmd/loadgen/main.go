@@ -20,6 +20,10 @@ type LoadConfig struct {
 	Clients         int
 	Conns           int
 	Timeout         time.Duration
+	TLSEnable       bool
+	TLSCACertFile   string
+	TLSServerName   string
+	TLSInsecureSkip bool
 	ValueSize       int
 	Keyspace        int
 	PrefillKeys     int
@@ -463,6 +467,10 @@ func parseFlags() LoadConfig {
 	flag.IntVar(&cfg.Clients, "clients", 128, "number of concurrent workers")
 	flag.IntVar(&cfg.Conns, "conns", 32, "number of grpc connections shared by workers")
 	flag.DurationVar(&cfg.Timeout, "timeout", 3*time.Second, "per-operation timeout")
+	flag.BoolVar(&cfg.TLSEnable, "tls-enable", false, "enable TLS for gRPC client connections")
+	flag.StringVar(&cfg.TLSCACertFile, "tls-ca-cert-file", "", "path to CA certificate PEM for server verification")
+	flag.StringVar(&cfg.TLSServerName, "tls-server-name", "", "TLS server name for certificate verification")
+	flag.BoolVar(&cfg.TLSInsecureSkip, "tls-insecure-skip-verify", false, "skip TLS cert hostname/chain verification (not recommended)")
 	flag.IntVar(&cfg.ValueSize, "valuesize", 512, "value payload size in bytes")
 	flag.IntVar(&cfg.Keyspace, "keyspace", 300000, "logical keyspace size")
 	flag.IntVar(&cfg.PrefillKeys, "prefill", 120000, "initial key count to prefill before workload")
@@ -519,6 +527,14 @@ func main() {
 	cfg := parseFlags()
 
 	router := cluster.NewPlacementRouterWithPoolSize(cfg.Addr, cfg.Conns)
+	if err := router.ConfigureTLS(cluster.ClientTLSConfig{
+		Enabled:            cfg.TLSEnable,
+		CACertFile:         cfg.TLSCACertFile,
+		ServerName:         cfg.TLSServerName,
+		InsecureSkipVerify: cfg.TLSInsecureSkip,
+	}); err != nil {
+		log.Fatalf("invalid TLS configuration: %v", err)
+	}
 	refreshCtx, cancel := context.WithTimeout(context.Background(), cfg.Timeout)
 	if err := router.Refresh(refreshCtx); err != nil {
 		log.Printf("placement refresh failed; workload will error until placement is available: %v", err)

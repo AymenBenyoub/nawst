@@ -19,6 +19,7 @@ import (
 	"github.com/AymenBenyoub/nawst/observability"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/reflection"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/emptypb"
@@ -39,6 +40,8 @@ type Server struct {
 	Store          *Store        // Store reference for snapshots during vnode transfer
 	versionCounter atomic.Uint64 // Atomic counter for logical versioning; increments on each write
 	rpcVerbose     bool
+	tlsCertFile    string
+	tlsKeyFile     string
 }
 
 type Request struct {
@@ -73,13 +76,30 @@ func (s *Server) debugf(format string, args ...any) {
 	}
 }
 
+func (s *Server) SetTLS(certFile, keyFile string) {
+	s.tlsCertFile = certFile
+	s.tlsKeyFile = keyFile
+}
+
 func (s *Server) Start(port int) error {
 	lis, err := net.Listen("tcp", "0.0.0.0:"+strconv.Itoa(port))
 	if err != nil {
 		return err
 	}
 
-	grpcServer := grpc.NewServer()
+	opts := make([]grpc.ServerOption, 0, 1)
+	if s.tlsCertFile != "" || s.tlsKeyFile != "" {
+		if s.tlsCertFile == "" || s.tlsKeyFile == "" {
+			return errors.New("both tls cert and key files must be provided")
+		}
+		creds, err := credentials.NewServerTLSFromFile(s.tlsCertFile, s.tlsKeyFile)
+		if err != nil {
+			return err
+		}
+		opts = append(opts, grpc.Creds(creds))
+	}
+
+	grpcServer := grpc.NewServer(opts...)
 	pb.RegisterKVServer(grpcServer, s)
 	reflection.Register(grpcServer)
 	// clean shutdown on SIGINT/SIGTERM
@@ -325,31 +345,62 @@ func (s *Server) applyReplicationBatch(ctx context.Context, req *pb.ReplicationB
 		return nil
 	}
 
+	type pendingReq struct {
+		op     OpType
+		key    string
+		value  []byte
+		vnode  uint16
+		ver    uint64
+		respCh chan Response
+	}
+
+	pending := make([]pendingReq, 0, len(req.Requests))
 	for _, item := range req.Requests {
 		if item == nil {
 			continue
 		}
 
-		resp := s.sendRequest(ctx, Request{
-			Op: func() OpType {
-				switch item.Op {
-				case pb.Op_PUT:
-					return OpPut
-				case pb.Op_DELETE:
-					return OpDelete
-				default:
-					return OpGet
-				}
-			}(),
-			Key:          item.Key,
-			Value:        item.Value,
-			VNodeID:      uint16(item.VnodeId),
-			Version:      item.Version,
-			ResponseChan: make(chan Response, 1),
-		})
+		op := OpGet
+		switch item.Op {
+		case pb.Op_PUT:
+			op = OpPut
+		case pb.Op_DELETE:
+			op = OpDelete
+		}
 
-		if resp.Err != nil {
-			return resp.Err
+		pending = append(pending, pendingReq{
+			op:     op,
+			key:    item.Key,
+			value:  item.Value,
+			vnode:  uint16(item.VnodeId),
+			ver:    item.Version,
+			respCh: make(chan Response, 1),
+		})
+	}
+
+	for _, p := range pending {
+		select {
+		case s.reqCh <- Request{
+			Op:           p.op,
+			Key:          p.key,
+			Value:        p.value,
+			VNodeID:      p.vnode,
+			Version:      p.ver,
+			ResponseChan: p.respCh,
+		}:
+		case <-ctx.Done():
+			return status.Error(codes.DeadlineExceeded, "replication batch cancelled")
+		}
+	}
+
+	for _, p := range pending {
+		select {
+		case resp := <-p.respCh:
+			if resp.Err != nil {
+				return resp.Err
+			}
+		case <-ctx.Done():
+			return status.Error(codes.DeadlineExceeded, "replication batch cancelled")
 		}
 	}
 
@@ -526,7 +577,7 @@ func (s *Server) StreamKV(stream pb.KV_StreamKVServer) error {
 		default:
 			coreOp = OpDelete
 		}
-		log.Printf("[rpc-stream] request op=%v key=%q bytes=%d", req.Op, req.Key, len(req.Value))
+		s.debugf("[rpc-stream] request op=%v key=%q bytes=%d", req.Op, req.Key, len(req.Value))
 
 		// Track that we have a new request in flight
 		inFlight.Add(1)

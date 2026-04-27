@@ -15,14 +15,26 @@ import (
 )
 
 var (
-	addr       = flag.String("addr", "localhost:9999", "server address (host:port)")
-	rpcTimeout = flag.Duration("rpc-timeout", 5*time.Second, "timeout for each RPC operation")
+	addr                  = flag.String("addr", "localhost:9999", "server address (host:port)")
+	rpcTimeout            = flag.Duration("rpc-timeout", 5*time.Second, "timeout for each RPC operation")
+	tlsEnable             = flag.Bool("tls-enable", false, "enable TLS for gRPC client connections")
+	tlsCAFile             = flag.String("tls-ca-cert-file", "", "path to CA certificate PEM for server verification")
+	tlsServerName         = flag.String("tls-server-name", "", "TLS server name for certificate verification")
+	tlsInsecureSkipVerify = flag.Bool("tls-insecure-skip-verify", false, "skip TLS cert hostname/chain verification (not recommended)")
 )
 
 func main() {
 	flag.Parse()
 
 	router := cluster.NewPlacementRouter(*addr)
+	if err := router.ConfigureTLS(cluster.ClientTLSConfig{
+		Enabled:            *tlsEnable,
+		CACertFile:         *tlsCAFile,
+		ServerName:         *tlsServerName,
+		InsecureSkipVerify: *tlsInsecureSkipVerify,
+	}); err != nil {
+		log.Fatalf("invalid TLS configuration: %v", err)
+	}
 	refreshCtx, cancel := context.WithTimeout(context.Background(), *rpcTimeout)
 	refreshErr := router.Refresh(refreshCtx)
 	cancel()

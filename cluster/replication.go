@@ -20,7 +20,7 @@ import (
 	"github.com/hashicorp/memberlist"
 	"github.com/hashicorp/raft"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/credentials"
 	"google.golang.org/protobuf/types/known/emptypb"
 )
 
@@ -67,9 +67,13 @@ type Replicator struct {
 
 	replicationMu      sync.Mutex
 	replicationWorkers map[string]*replicationBatchWorker
+
+	credsMu        sync.RWMutex
+	transportCreds credentials.TransportCredentials
 }
 
 func NewReplicator(id string, ml *memberlist.Memberlist, rf int) *Replicator {
+	creds, _ := BuildClientTransportCredentials(ClientTLSConfig{Enabled: false})
 	return &Replicator{
 		ID:                 id,
 		Ml:                 ml,
@@ -86,7 +90,25 @@ func NewReplicator(id string, ml *memberlist.Memberlist, rf int) *Replicator {
 		degradedStreak:     make(map[string]int),
 		migrationSource:    make(map[uint16]string),
 		replicationWorkers: make(map[string]*replicationBatchWorker),
+		transportCreds:     creds,
 	}
+}
+
+func (r *Replicator) ConfigureClientTLS(cfg ClientTLSConfig) error {
+	creds, err := BuildClientTransportCredentials(cfg)
+	if err != nil {
+		return err
+	}
+	r.credsMu.Lock()
+	r.transportCreds = creds
+	r.credsMu.Unlock()
+	return nil
+}
+
+func (r *Replicator) dialCreds() credentials.TransportCredentials {
+	r.credsMu.RLock()
+	defer r.credsMu.RUnlock()
+	return r.transportCreds
 }
 
 func (r *Replicator) SetRaft(rfNode *RaftNode) {
@@ -1012,7 +1034,7 @@ func (r *Replicator) getOrCreateClientByAddr(nodeID, rpcAddr string) (pb.KVClien
 	r.mu.RUnlock()
 
 	// 2. Dial OUTSIDE the lock (prevents stalling the whole node)
-	conn, err := grpc.NewClient(rpcAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	conn, err := grpc.NewClient(rpcAddr, grpc.WithTransportCredentials(r.dialCreds()))
 	if err != nil {
 		return nil, err
 	}
