@@ -254,12 +254,14 @@ func (r *Replicator) StartMetricsReporter(interval time.Duration) {
 		defer longEvalTicker.Stop()
 
 		initialPlacementDone := false
+		metricsTick := 0
 		for {
 			select {
 			case <-r.stopCh:
 				return
 			case <-publishTicker.C:
-				r.publishLocalMetrics()
+				metricsTick++
+				r.publishLocalMetrics(metricsTick%3 == 0)
 				if !initialPlacementDone && (r.Rf == nil || r.Rf.IsLeader()) {
 					r.UpdatePlacement()
 					initialPlacementDone = true
@@ -277,7 +279,7 @@ func (r *Replicator) StartMetricsReporter(interval time.Duration) {
 	}()
 }
 
-func (r *Replicator) publishLocalMetrics() {
+func (r *Replicator) publishLocalMetrics(probePeers bool) {
 	r.metricsMu.RLock()
 	collector := r.collector
 	gossipFn := r.gossipFn
@@ -287,7 +289,7 @@ func (r *Replicator) publishLocalMetrics() {
 		return
 	}
 
-	if r.Ml != nil {
+	if probePeers && r.Ml != nil {
 		for _, member := range r.Ml.Members() {
 			peerID, rpcAddr, err := parseMeta(member.Meta)
 			if err != nil {
@@ -1181,15 +1183,11 @@ func (r *Replicator) ReplicateToAll(ctx context.Context, op pb.Op, key string, v
 	}
 
 	if len(targets) == 0 {
-		log.Printf("[replicator] no placement targets for key=%q; keeping write local only", key)
+		r.debugf("[replicator] no placement targets for key=%q; keeping write local only", key)
 		report("local_only", 0)
 		return nil
 	}
 	if acks+len(targets) < required {
-		if firstErr != nil {
-			report("quorum_impossible", len(targets))
-			return fmt.Errorf("quorum impossible: need %d acks, have %d local + %d remotes: %w", required, acks, len(targets), firstErr)
-		}
 		report("quorum_impossible", len(targets))
 		return fmt.Errorf("quorum impossible: need %d acks, have %d local + %d remotes", required, acks, len(targets))
 	}
@@ -1377,7 +1375,7 @@ func (r *Replicator) transferVNodeFrom(sourceNodeID string, vnodeID uint16, epoc
 
 		// End-of-stream marker
 		if resp.EmptyEntries {
-			log.Printf("[transfer] received end-of-stream for vnode=%d", vnodeID)
+			r.debugf("[transfer] received end-of-stream for vnode=%d", vnodeID)
 			break
 		}
 
@@ -1412,7 +1410,7 @@ func (r *Replicator) transferVNodeFrom(sourceNodeID string, vnodeID uint16, epoc
 		// TODO: Add per-vnode replay queue to reduce interleaving during high write pressure.
 	}
 
-	log.Printf("[transfer] applied %d entries for vnode=%d from %s", entriesReceived, vnodeID, sourceNodeID)
+	r.debugf("[transfer] applied %d entries for vnode=%d from %s", entriesReceived, vnodeID, sourceNodeID)
 	result = "success"
 	return nil
 }

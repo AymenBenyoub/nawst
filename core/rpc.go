@@ -57,6 +57,7 @@ type Response struct {
 	Op    OpType
 	Value []byte
 	Err   error
+	Version uint64
 }
 
 func NewServer(reqCh chan<- Request, store *Store) *Server {
@@ -220,17 +221,24 @@ func (s *Server) Get(ctx context.Context, req *pb.GetRequest) (*pb.GetResponse, 
 		observability.ObserveClientRequest("get", clientResult)
 	}()
 	s.debugf("[rpc] GET request key=%q", req.Key)
-	val, version, err := s.Store.GetWithVersion(req.Key)
-	if err != nil {
-		if errors.Is(err, ErrKeyNotFound) {
+	// Route GET through the EventLoop to avoid concurrent store locking.
+	resp := s.sendRequest(ctx, Request{
+		Op:           OpGet,
+		Key:          req.Key,
+		ResponseChan: make(chan Response, 1),
+	})
+	if resp.Err != nil {
+		if errors.Is(resp.Err, ErrKeyNotFound) {
 			result = "not_found"
 			clientResult = "error"
 			return nil, status.Error(codes.NotFound, "key not found")
 		}
 		result = "error"
 		clientResult = "error"
-		return nil, status.Errorf(codes.Internal, "Failed to GET key: %v", err)
+		return nil, status.Errorf(codes.Internal, "Failed to GET key: %v", resp.Err)
 	}
+	val := resp.Value
+	version := resp.Version
 	if req.GetMinVersion() > 0 && version < req.GetMinVersion() {
 		result = "stale"
 		clientResult = "error"

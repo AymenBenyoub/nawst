@@ -225,9 +225,9 @@ import (
 )
 
 const (
-	replicationBatchSize   = 256
+	replicationBatchSize   = 512
 	replicationBatchWindow = 1 * time.Millisecond
-	maxInFlightBatches     = 256
+	maxInFlightBatches     = 512
 )
 
 type replicationTask struct {

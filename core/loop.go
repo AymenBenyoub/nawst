@@ -97,9 +97,9 @@ func (el *EventLoop) Run() {
 			}
 
 			if req.Op == OpGet {
-				val, err := el.Store.Get(req.Key)
-				// BLOCKING send for GET requests
-				req.ResponseChan <- Response{Op: req.Op, Value: val, Err: err}
+				val, ver, err := el.Store.GetWithVersion(req.Key)
+				// BLOCKING send for GET requests, include version
+				req.ResponseChan <- Response{Op: req.Op, Value: val, Err: err, Version: ver}
 			} else {
 				// Fast-path bypass for AckAfterEnqueue: immediately apply and ACK without batching.
 				if el.Wal.ackMode == AckAfterEnqueue {

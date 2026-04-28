@@ -45,8 +45,8 @@ func main() {
 	var rpcTLSServerName = flag.String("rpc-tls-server-name", "", "TLS server name for outbound gRPC verification")
 	var rpcTLSInsecureSkipVerify = flag.Bool("rpc-tls-insecure-skip-verify", false, "skip TLS cert hostname/chain verification for outbound gRPC (not recommended)")
 	flag.Parse()
-	const writerBufferSize = 64 * 1024
-	const requestChannelSize = 10000
+	const writerBufferSize = 72 * 1024
+	const requestChannelSize = 12000
 	if *raftAdvertiseIP == "" {
 		*raftAdvertiseIP = *rpcHost
 	}
