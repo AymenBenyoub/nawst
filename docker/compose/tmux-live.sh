@@ -10,7 +10,7 @@ echo "[tmux-live] ensuring compose stack is running"
 docker compose up -d --build --remove-orphans
 
 echo "[tmux-live] waiting for server containers to be running"
-for svc in node9999 node10000 node10001 node10002; do
+for svc in node9999 node10000 node10001 node10002 ; do
   ok=0
   for _ in $(seq 1 30); do
     if docker compose ps --status running --services | grep -qx "$svc"; then
@@ -37,6 +37,7 @@ tmux new-session -d -s "$SESSION" "cd '$ROOT_DIR' && docker compose logs --tail=
 tmux split-window -h -t "$SESSION":0 "cd '$ROOT_DIR' && docker compose logs --tail=50 -f node10000"
 tmux split-window -v -t "$SESSION":0.0 "cd '$ROOT_DIR' && docker compose logs --tail=50 -f node10001"
 tmux split-window -v -t "$SESSION":0.1 "cd '$ROOT_DIR' && docker compose logs --tail=50 -f node10002"
+# tmux split-window -v -t "$SESSION":0.2 "cd '$ROOT_DIR' && docker compose logs --tail=50 -f node10003"
 
 # Extra window for quick client access.
 # After `quit` in kvcli, stay in an interactive shell so the pane is still usable.
