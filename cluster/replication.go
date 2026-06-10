@@ -704,6 +704,12 @@ func (r *Replicator) ApplyPlacementFromRaft(p *Placement) {
 
 	// Start async migration goroutines (non-blocking return)
 	go func() {
+		var gainedTransferred int
+		var replicaTransferred int
+		var gainedFailures int
+		var replicaFailures int
+		var lostFailures int
+
 		// 1. Gain vnodes from old primary (or replicas if primary is down)
 		for _, vnodeID := range gainedVNodes {
 			observability.IncMigrationActive()
@@ -727,20 +733,17 @@ func (r *Replicator) ApplyPlacementFromRaft(p *Placement) {
 				r.setMigrationSource(vnodeID, candidates[0])
 			}
 
-			var transferErr error
 			success := false
 			for _, src := range candidates {
 				if err := r.transferVNodeFrom(src, vnodeID, p.Epoch); err != nil {
-					transferErr = err
-					log.Printf("[migration] transfer attempt failed vnode=%d source=%s err=%v", vnodeID, src, err)
 					continue
 				}
-				log.Printf("[migration] successfully gained vnode=%d from %s", vnodeID, src)
+				gainedTransferred++
 				success = true
 				break
 			}
 			if !success {
-				log.Printf("[migration] failed to gain vnode=%d from all candidates=%v last_err=%v", vnodeID, candidates, transferErr)
+				gainedFailures++
 			} else {
 				r.clearMigrationSource(vnodeID)
 			}
@@ -761,20 +764,17 @@ func (r *Replicator) ApplyPlacementFromRaft(p *Placement) {
 				}
 			}
 
-			var transferErr error
 			success := false
 			for _, src := range candidates {
 				if err := r.transferVNodeFrom(src, vnodeID, p.Epoch); err != nil {
-					transferErr = err
 					continue
 				}
+				replicaTransferred++
 				success = true
 				break
 			}
 			if !success {
-				log.Printf("[migration] failed to catch up new replica vnode=%d candidates=%v err=%v", vnodeID, candidates, transferErr)
-			} else {
-				log.Printf("[migration] caught up new replica vnode=%d", vnodeID)
+				replicaFailures++
 			}
 			observability.DecMigrationActive()
 		}
@@ -790,12 +790,17 @@ func (r *Replicator) ApplyPlacementFromRaft(p *Placement) {
 			}
 			if dropFn != nil {
 				if err := dropFn(vnodeID); err != nil {
-					log.Printf("[migration] failed dropping lost vnode=%d: %v", vnodeID, err)
-				} else {
-					log.Printf("[migration] dropped lost vnode=%d", vnodeID)
+					lostFailures++
 				}
 			}
 			r.clearMigrationSource(vnodeID)
+		}
+
+		log.Printf("[migration] epoch=%d->%d: completed transferring %d vnodes, gained %d vnodes, lost %d vnodes",
+			oldPl.Epoch, p.Epoch, gainedTransferred+replicaTransferred, gainedTransferred, len(lostVNodes))
+		if gainedFailures > 0 || replicaFailures > 0 || lostFailures > 0 {
+			log.Printf("[migration] epoch=%d->%d: transfer failures: gained=%d replica=%d lost=%d",
+				oldPl.Epoch, p.Epoch, gainedFailures, replicaFailures, lostFailures)
 		}
 
 		// 3. Update replica set for changed vnodes
