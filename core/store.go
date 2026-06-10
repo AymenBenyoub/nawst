@@ -22,8 +22,7 @@ type Store struct {
 
 	// vNodeIdx: maps vnode ID → set of keys owned by that vnode.
 	// Layout: map[uint16]map[string]bool where inner map = {key: true if owned}.
-	// Enables O(1) key lookup within a vnode and O(n_keys_per_vnode) iteration.
-	// Typical vnode = ~1024 keys / 4 nodes = ~250 keys, so iteration is fast.
+	
 	vNodeIdx map[uint16]map[string]bool
 
 	// tombstoneIdx tracks deleted keys by vnode so migration can transfer delete markers.
@@ -78,7 +77,7 @@ func (s *Store) Apply(cmd Command) error {
 	case OpPut:
 		oldVal, hadOldVal := s.storage[cmd.Key]
 		// 1. Write value to global storage (fast, O(1)).
-		s.storage[cmd.Key] = slices.Clone(cmd.Value)
+		s.storage[cmd.Key] = cmd.Value
 		if hadOldVal {
 			s.valueBytes -= int64(len(oldVal))
 		}
