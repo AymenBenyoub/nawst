@@ -37,11 +37,11 @@ type NodeMetrics struct {
 }
 
 const (
-	WeightRTT  = 0.30
-	WeightCPU  = 0.19
-	WeightMEM  = 0.19
-	WeightNET  = 0.22
-	WeightDisk = 0.10
+	WeightRTT  = 0.31
+	WeightCPU  = 0.15
+	WeightMEM  = 0.16
+	WeightNET  = 0.24
+	WeightDisk = 0.14
 )
 
 func CalculateScores(metrics []NodeMetrics) []NodeInfo {
