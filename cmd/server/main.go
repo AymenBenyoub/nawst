@@ -31,7 +31,7 @@ func main() {
 
 	var bandwidthMbps = flag.Int("bandwidth-mbps", 50, "estimated node NIC bandwidth in Mbps (static capacity denominator)")
 	var diskPath = flag.String("disk-path", "/", "filesystem path used for disk capacity/usage metrics")
-	var metricsInterval = flag.Duration("metrics-interval", 5*time.Second, "interval for collecting and gossiping node metrics")
+	var metricsInterval = flag.Duration("metrics-interval", 10*time.Second, "interval for collecting and gossiping node metrics")
 
 	var walDir = flag.String("wal-dir", "", "directory for WAL files (default: kvst/node-<rpc-port>)")
 	var replicationFactor = flag.Int("rf", 3, "replication factor for the cluster")

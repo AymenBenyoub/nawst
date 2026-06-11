@@ -652,7 +652,7 @@ func (s *Server) TransferVNode(stream pb.KV_TransferVNodeServer) error {
 	vnodeID := uint16(req.VnodeId)
 	epoch := req.PlacementEpoch
 
-	log.Printf("[transfer] starting vnode=%d snapshot (epoch=%d)", vnodeID, epoch)
+	// log.Printf("[transfer] starting vnode=%d snapshot (epoch=%d)", vnodeID, epoch)
 
 	// Snapshot all keys owned by this vnode
 	snapshot := s.Store.SnapshotVNode(vnodeID)
