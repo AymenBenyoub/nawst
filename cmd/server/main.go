@@ -24,7 +24,7 @@ func main() {
 
 	var ack = flag.Int("ack", 1, "ack mode: 0=after enqueue, 1=after flush, 2=after fsync")
 
-	var eventLoopBatchSize = flag.Int("event-loop-batch-size", 512, "max number of requests to process in a single event loop iteration")
+	var eventLoopBatchSize = flag.Int("elb-size", 512, "max number of requests to process in a single event loop iteration")
 
 	var gossipBindAddr = flag.String("gossip-bind-addr", "0.0.0.0", "memberlist bind address")
 	var gossipPort = flag.Int("gossip-port", 0, "memberlist gossip port (0 selects random port on non-seed node)")
