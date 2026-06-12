@@ -42,6 +42,7 @@ type Server struct {
 	rpcVerbose     bool
 	tlsCertFile    string
 	tlsKeyFile     string
+eventLoopBatchSize int
 }
 
 type Request struct {
@@ -63,6 +64,7 @@ type Response struct {
 func NewServer(reqCh chan<- Request, store *Store) *Server {
 	return &Server{
 		reqCh: reqCh,
+		
 		Store: store,
 	}
 }

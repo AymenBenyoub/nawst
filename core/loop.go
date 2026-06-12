@@ -8,6 +8,7 @@ type EventLoop struct {
 	Store *Store
 	Wal   *Wal
 	ReqCh <-chan Request
+	BatchSize int
 }
 
 type pendingAck struct {
@@ -35,7 +36,7 @@ type Command struct {
 	Version uint64 // Logical version for conflict resolution; increments per write
 }
 
-const batchSize = 512
+// const batchSize = 512
 const batchTimeout = 2 * time.Millisecond
 
 func (el *EventLoop) Run() {
@@ -119,7 +120,7 @@ func (el *EventLoop) Run() {
 				}
 
 				writeBatch = append(writeBatch, req)
-				if len(writeBatch) >= batchSize {
+				if len(writeBatch) >= el.BatchSize {
 					processBatch()
 					ticker.Reset(batchTimeout)
 				}
