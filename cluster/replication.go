@@ -574,24 +574,19 @@ func (r *Replicator) UpdatePlacement() {
 			}
 
 			// Also check replica drift
-			if len(pl.VNodes[i].Replicas) != len(prev.VNodes[i].Replicas) {
+			prevReplicas := sortedCopy(prev.VNodes[i].Replicas)
+			newReplicas := sortedCopy(pl.VNodes[i].Replicas)
+			if !slices.Equal(prevReplicas, newReplicas) {
 				movedReplicaCount++
-			} else {
-				for j, rep := range pl.VNodes[i].Replicas {
-					if rep != prev.VNodes[i].Replicas[j] {
-						movedReplicaCount++
-						break
-					}
-				}
 			}
 		}
 
 		// Calculate total drift
 
-		primaryThreshold := (VNodeCount * 12) / 100
-		replicaThreshold := (VNodeCount * (r.ReplicationFactor - 1) * 20) / 100
+		primaryThreshold := VNodeCount * 12 / 100
+		replicaThreshold := VNodeCount * (r.ReplicationFactor - 1) / 5
 
-		if movedPrimaryCount < primaryThreshold && movedReplicaCount < replicaThreshold {
+		if (movedPrimaryCount) < primaryThreshold && (movedReplicaCount) < replicaThreshold {
 
 			// Drift is negligible. Abort update to prevent thrashing.
 			log.Printf("[placement-long] delta (%d,%d) below threshold (%d,%d), preserving epoch %d", movedPrimaryCount, movedReplicaCount, primaryThreshold, replicaThreshold, prev.Epoch)
@@ -626,7 +621,13 @@ func (r *Replicator) UpdatePlacement() {
 	r.SetPlacement(pl)
 	log.Printf("[placement-long] placement updated locally (epoch=%d) with %d active nodes", pl.Epoch, len(scores))
 }
-
+//helper to sort replica sets
+func sortedCopy(s []string) []string {
+    c := make([]string, len(s))
+    copy(c, s)
+    sort.Strings(c)
+    return c
+}
 func (r *Replicator) ApplyPlacementFromRaft(p *Placement) {
 	if p == nil {
 		return

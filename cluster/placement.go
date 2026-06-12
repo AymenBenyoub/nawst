@@ -10,8 +10,9 @@ import (
 	"github.com/cespare/xxhash/v2"
 )
 
+
 const (
-	VNodeCount = 1024
+	 VNodeCount int = 1024 
 
 	// MaxUint64 represents the maximum possible hash value.
 	MaxUint64 = ^uint64(0)
