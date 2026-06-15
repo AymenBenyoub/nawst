@@ -10,9 +10,8 @@ import (
 	"github.com/cespare/xxhash/v2"
 )
 
-
 const (
-	 VNodeCount int = 1024 
+	VNodeCount int = 1024
 
 	// MaxUint64 represents the maximum possible hash value.
 	MaxUint64 = ^uint64(0)
@@ -307,7 +306,21 @@ func (p *Placement) AssignReplicas(metrics []NodeMetrics, rttMatrix map[string]m
 
 			// Final Suitability Score: Lower is better.
 			// We want low RTT, low Saturation, and high Capacity.
-			suitability := rtt * bwPenalty * capFactor
+			// Calculate base suitability (Lower is better)
+			baseSuitability := rtt * bwPenalty * capFactor
+
+			// --- THE FIX: Deterministic VNode Hash Jitter ---
+			// Create a hash using both the VNode ID and the Candidate Node ID
+			hashStr := strconv.FormatUint(uint64(v.ID), 10) + ":" + node.ID
+			hashVal := xxhash.Sum64String(hashStr)
+
+			// Normalize the hash into a small multiplier between 1.00 and 1.10 (a +10% jitter variance)
+			// This breaks ties and ensures a primary distributes its replicas evenly across
+			// candidates with similar network profiles, preventing massive all-at-once migrations.
+			jitterModifier := 1.0 + (float64(hashVal%1000) / 10000.0)
+
+			// Apply the jitter to the final score
+			suitability := baseSuitability * jitterModifier
 
 			candidates = append(candidates, candidate{node.ID, suitability})
 		}
