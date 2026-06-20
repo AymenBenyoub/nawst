@@ -89,10 +89,8 @@ func (r *PlacementRouter) Close() error {
 
 	var firstErr error
 	if r.bootstrapConn != nil {
-		if err := r.bootstrapConn.Close(); err != nil {
-			if firstErr == nil {
-				firstErr = err
-			}
+		if err := r.bootstrapConn.Close(); err != nil && firstErr == nil {
+			firstErr = err
 		}
 		r.bootstrapConn = nil
 		r.bootstrapClient = nil
@@ -226,7 +224,7 @@ type routeTarget struct {
 	rpcAddr string
 }
 
-func (r *PlacementRouter) routeForKey(key string, readAnyNode bool) ([]routeTarget, bool) {
+func (r *PlacementRouter) routeForKey(key string) ([]routeTarget, bool) {
 	state := r.snapshotState()
 	if state == nil {
 		return nil, false
@@ -262,60 +260,12 @@ func (r *PlacementRouter) routeForKey(key string, readAnyNode bool) ([]routeTarg
 		})
 	}
 
-	// If readAnyNode → include replicas
-	if readAnyNode {
-		for _, replica := range vnode.Replicas {
-			if addr := addrByNode[replica]; addr != "" {
-				targets = append(targets, routeTarget{
-					nodeID:  replica,
-					rpcAddr: addr,
-				})
-			}
-		}
-
-		// rotate for load balancing
-		if len(targets) > 1 {
-			offset := int(r.readCursor.Add(1) % uint64(len(targets)))
-			rotated := make([]routeTarget, 0, len(targets))
-			rotated = append(rotated, targets[offset:]...)
-			rotated = append(rotated, targets[:offset]...)
-			return rotated, true
-		}
-	}
-
-	// 	if readAnyNode {
-	//     vnodeID := vnodeIDForKey(key)
-	//     vnode := state.Vnodes[vnodeID]
-
-	//     candidates := make([]routeTarget, 0, 1+len(vnode.Replicas))
-
-	//     addrByNode := make(map[string]string)
-	//     for _, n := range state.Nodes {
-	//         addrByNode[n.Id] = n.RpcAddr
-	//     }
-
-	//     if addr := addrByNode[vnode.Primary]; addr != "" {
-	//         candidates = append(candidates, routeTarget{vnode.Primary, addr})
-	//     }
-
-	//     for _, rID := range vnode.Replicas {
-	//         if addr := addrByNode[rID]; addr != "" {
-	//             candidates = append(candidates, routeTarget{rID, addr})
-	//         }
-	//     }
-
-	//     if len(candidates) == 0 {
-	//         return nil, false
-	//     }
-
-	//     return candidates, true
-	// }
 	return targets, true
 }
 
-func (r *PlacementRouter) rpcWithPlacement(ctx context.Context, key string, readAnyNode bool, call func(pb.KVClient) error) error {
+func (r *PlacementRouter) rpcWithPlacement(ctx context.Context, key string, call func(pb.KVClient) error) error {
 	invoke := func() error {
-		targets, ok := r.routeForKey(key, readAnyNode)
+		targets, ok := r.routeForKey(key)
 		if !ok || len(targets) == 0 {
 			return errors.New("placement not ready for key routing")
 		}
@@ -377,7 +327,7 @@ func (r *PlacementRouter) rpcWithPlacement(ctx context.Context, key string, read
 func (r *PlacementRouter) GetWithMinVersion(ctx context.Context, key string, minVersion uint64) ([]byte, uint64, error) {
 	var value []byte
 	var version uint64
-	err := r.rpcWithPlacement(ctx, key, true, func(client pb.KVClient) error {
+	err := r.rpcWithPlacement(ctx, key, func(client pb.KVClient) error {
 		resp, err := client.Get(ctx, &pb.GetRequest{Key: key, MinVersion: minVersion})
 		if err != nil {
 			return err
@@ -395,14 +345,14 @@ func (r *PlacementRouter) Get(ctx context.Context, key string) ([]byte, error) {
 }
 
 func (r *PlacementRouter) Put(ctx context.Context, key string, value []byte) error {
-	return r.rpcWithPlacement(ctx, key, false, func(client pb.KVClient) error {
+	return r.rpcWithPlacement(ctx, key, func(client pb.KVClient) error {
 		_, err := client.Put(ctx, &pb.PutRequest{Key: key, Value: value})
 		return err
 	})
 }
 
 func (r *PlacementRouter) Delete(ctx context.Context, key string) error {
-	return r.rpcWithPlacement(ctx, key, false, func(client pb.KVClient) error {
+	return r.rpcWithPlacement(ctx, key, func(client pb.KVClient) error {
 		_, err := client.Delete(ctx, &pb.DeleteRequest{Key: key})
 		return err
 	})
