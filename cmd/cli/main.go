@@ -8,10 +8,12 @@ import (
 	"io"
 	"log"
 	"os"
+	"sort"
 	"strings"
 	"time"
 
 	"github.com/AymenBenyoub/nawst/cluster"
+	pb "github.com/AymenBenyoub/nawst/core/proto"
 )
 
 var (
@@ -68,7 +70,14 @@ func main() {
 			cancel()
 			return
 		case "help":
-			fmt.Println("Commands: get KEY, put KEY VALUE, putfile KEY PATH, delete KEY, quit")
+			fmt.Println("Commands: get KEY, put KEY VALUE, putfile KEY PATH, delete KEY, status, quit")
+		case "status":
+			status, err := router.Status(ctx)
+			if err != nil {
+				fmt.Printf("Error: %v\n", err)
+			} else {
+				fmt.Println(formatClusterStatus(status))
+			}
 		case "get":
 			if len(parts) < 2 {
 				fmt.Println("usage: get KEY")
@@ -124,4 +133,88 @@ func main() {
 	if err := scanner.Err(); err != nil && err != io.EOF {
 		log.Fatalf("input error: %v", err)
 	}
+}
+
+func formatClusterStatus(status *pb.ClusterStatus) string {
+	if status == nil {
+		return "Cluster status unavailable"
+	}
+	state := status.GetState()
+	if state == nil {
+		state = &pb.ClusterState{}
+	}
+
+	nodes := state.GetNodes()
+	vnodes := state.GetVnodes()
+	primaryCounts := make(map[string]int, len(nodes))
+	replicaTargets := make(map[string]map[string]struct{}, len(nodes))
+	for _, node := range nodes {
+		if node == nil || node.GetId() == "" {
+			continue
+		}
+		if _, ok := replicaTargets[node.GetId()]; !ok {
+			replicaTargets[node.GetId()] = make(map[string]struct{})
+		}
+	}
+	for _, vnode := range vnodes {
+		if vnode == nil {
+			continue
+		}
+		primary := vnode.GetPrimary()
+		if primary != "" {
+			primaryCounts[primary]++
+			if _, ok := replicaTargets[primary]; !ok {
+				replicaTargets[primary] = make(map[string]struct{})
+			}
+			for _, replica := range vnode.GetReplicas() {
+				if replica != "" && replica != primary {
+					replicaTargets[primary][replica] = struct{}{}
+				}
+			}
+		}
+	}
+
+	ids := make([]string, 0, len(nodes))
+	for _, node := range nodes {
+		if node != nil && node.GetId() != "" {
+			ids = append(ids, node.GetId())
+		}
+	}
+	sort.Strings(ids)
+
+	lines := []string{
+		"Cluster status",
+		fmt.Sprintf("Leader: %s", formatLeader(status.GetLeader())),
+		fmt.Sprintf("Nodes: %d", len(nodes)),
+		fmt.Sprintf("Placement epoch: %d", state.GetEpoch()),
+		"Placement:",
+	}
+	for _, nodeID := range ids {
+		replicas := sortedReplicaTargets(replicaTargets[nodeID])
+		if len(replicas) == 0 {
+			replicas = "none"
+		}
+		lines = append(lines, fmt.Sprintf("  %s: %d vnodes -> replicas: %s", nodeID, primaryCounts[nodeID], replicas))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func formatLeader(leader string) string {
+	leader = strings.TrimSpace(leader)
+	if leader == "" {
+		return "unknown"
+	}
+	return leader
+}
+
+func sortedReplicaTargets(targets map[string]struct{}) string {
+	if len(targets) == 0 {
+		return ""
+	}
+	ids := make([]string, 0, len(targets))
+	for id := range targets {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	return strings.Join(ids, ", ")
 }

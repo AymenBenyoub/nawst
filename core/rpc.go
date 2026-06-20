@@ -31,18 +31,19 @@ type Replicator interface {
 	GetVNodeForKey(key string) uint16 // Returns vnode ID for a key; used to annotate commands
 	GetMigrationSourceForKey(key string) string
 	SnapshotClusterState() *pb.ClusterState
+	LeaderAddr() string
 }
 
 type Server struct {
 	pb.UnimplementedKVServer
-	reqCh          chan<- Request
-	Replicator     Replicator
-	Store          *Store        // Store reference for snapshots during vnode transfer
-	versionCounter atomic.Uint64 // Atomic counter for logical versioning; increments on each write
-	rpcVerbose     bool
-	tlsCertFile    string
-	tlsKeyFile     string
-eventLoopBatchSize int
+	reqCh              chan<- Request
+	Replicator         Replicator
+	Store              *Store        // Store reference for snapshots during vnode transfer
+	versionCounter     atomic.Uint64 // Atomic counter for logical versioning; increments on each write
+	rpcVerbose         bool
+	tlsCertFile        string
+	tlsKeyFile         string
+	eventLoopBatchSize int
 }
 
 type Request struct {
@@ -55,16 +56,16 @@ type Request struct {
 }
 
 type Response struct {
-	Op    OpType
-	Value []byte
-	Err   error
+	Op      OpType
+	Value   []byte
+	Err     error
 	Version uint64
 }
 
 func NewServer(reqCh chan<- Request, store *Store) *Server {
 	return &Server{
 		reqCh: reqCh,
-		
+
 		Store: store,
 	}
 }
@@ -470,6 +471,16 @@ func (s *Server) GetClusterState(ctx context.Context, _ *emptypb.Empty) (*pb.Clu
 		return &pb.ClusterState{}, nil
 	}
 	return s.Replicator.SnapshotClusterState(), nil
+}
+
+func (s *Server) Status(ctx context.Context, _ *emptypb.Empty) (*pb.ClusterStatus, error) {
+	if s.Replicator == nil {
+		return &pb.ClusterStatus{State: &pb.ClusterState{}}, nil
+	}
+	return &pb.ClusterStatus{
+		Leader: s.Replicator.LeaderAddr(),
+		State:  s.Replicator.SnapshotClusterState(),
+	}, nil
 }
 func (s *Server) Replicate(ctx context.Context, req *pb.ReplicationRequest) (*emptypb.Empty, error) {
 	started := time.Now()

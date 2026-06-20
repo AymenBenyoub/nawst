@@ -11,6 +11,7 @@ service KV {
     rpc Replicate(ReplicationRequest) returns (google.protobuf.Empty);
     rpc ReplicateBatch(ReplicationBatchRequest) returns (google.protobuf.Empty);
     rpc ReplicateStream(stream ReplicationBatchRequest) returns (stream ReplicationBatchAck);
+    rpc Status(google.protobuf.Empty) returns (ClusterStatus);
     rpc GetClusterState(google.protobuf.Empty) returns (ClusterState);
     rpc StreamKV(stream StreamReq) returns (stream StreamResp);
     rpc TransferVNode(stream VNodeTransferReq) returns (stream VNodeTransferResp);
@@ -69,6 +70,11 @@ message ClusterState {
     uint64 epoch = 1;
     repeated ClusterNode nodes = 2;
     repeated ClusterVNode vnodes = 3;
+}
+
+message ClusterStatus {
+    string leader = 1;
+    ClusterState state = 2;
 }
 enum Op {
     PUT = 0;

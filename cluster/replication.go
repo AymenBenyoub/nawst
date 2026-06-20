@@ -246,8 +246,8 @@ func (r *Replicator) StartMetricsReporter(interval time.Duration) {
 	}
 
 	publishTicker := time.NewTicker(interval)
-	shortEvalTicker := time.NewTicker(6 * interval)
-	longEvalTicker := time.NewTicker(24 * interval)
+	shortEvalTicker := time.NewTicker(2 * interval)
+	longEvalTicker := time.NewTicker(6 * interval)
 	go func() {
 		defer publishTicker.Stop()
 		defer shortEvalTicker.Stop()
@@ -621,12 +621,13 @@ func (r *Replicator) UpdatePlacement() {
 	r.SetPlacement(pl)
 	log.Printf("[placement-long] placement updated locally (epoch=%d) with %d active nodes", pl.Epoch, len(scores))
 }
-//helper to sort replica sets
+
+// helper to sort replica sets
 func sortedCopy(s []string) []string {
-    c := make([]string, len(s))
-    copy(c, s)
-    sort.Strings(c)
-    return c
+	c := make([]string, len(s))
+	copy(c, s)
+	sort.Strings(c)
+	return c
 }
 func (r *Replicator) ApplyPlacementFromRaft(p *Placement) {
 	if p == nil {
@@ -641,16 +642,12 @@ func (r *Replicator) ApplyPlacementFromRaft(p *Placement) {
 	// If this is the first placement, skip migration (no old vnodes to compare)
 	if oldPl == nil {
 		myVNodes := 0
-		var myReplicas []string
 		for _, v := range p.VNodes {
 			if v.Primary == r.ID {
 				myVNodes++
-				if len(myReplicas) == 0 && len(v.Replicas) > 0 {
-					myReplicas = v.Replicas
-				}
 			}
 		}
-		log.Printf("[placement-raft] initial placement epoch=%d, assigned %d vnodes, replicating to: %v", p.Epoch, myVNodes, myReplicas)
+		log.Printf("[placement-raft] initial placement epoch=%d: this node is primary for %d vnodes", p.Epoch, myVNodes)
 		return
 	}
 
@@ -702,6 +699,11 @@ func (r *Replicator) ApplyPlacementFromRaft(p *Placement) {
 	log.Printf("[placement-raft] epoch=%d->%d: gained=%d lost=%d primary-replica-changes=%d new-replicas=%d",
 		oldPl.Epoch, p.Epoch, len(gainedVNodes), len(lostVNodes), len(changedReplicas), len(addedReplicaVNodes))
 	observability.ObservePlacementApply(p.Epoch, len(gainedVNodes), len(lostVNodes), len(changedReplicas), len(addedReplicaVNodes), time.Since(startedAt))
+	log.Printf("[migration] epoch=%d->%d planning: primary=%d [%s] replica-sync=%d lost=%d [%s]",
+		oldPl.Epoch, p.Epoch,
+		len(gainedVNodes), formatUint16Sample(gainedVNodes, 5),
+		len(addedReplicaVNodes),
+		len(lostVNodes), formatUint16Sample(lostVNodes, 5))
 
 	// Start async migration goroutines (non-blocking return)
 	go func() {
@@ -710,6 +712,8 @@ func (r *Replicator) ApplyPlacementFromRaft(p *Placement) {
 		var gainedFailures int
 		var replicaFailures int
 		var lostFailures int
+		gainedBySource := make(map[string]int)
+		replicaBySource := make(map[string]int)
 
 		// 1. Gain vnodes from old primary (or replicas if primary is down)
 		for _, vnodeID := range gainedVNodes {
@@ -740,6 +744,7 @@ func (r *Replicator) ApplyPlacementFromRaft(p *Placement) {
 					continue
 				}
 				gainedTransferred++
+				gainedBySource[src]++
 				success = true
 				break
 			}
@@ -771,6 +776,7 @@ func (r *Replicator) ApplyPlacementFromRaft(p *Placement) {
 					continue
 				}
 				replicaTransferred++
+				replicaBySource[src]++
 				success = true
 				break
 			}
@@ -797,16 +803,14 @@ func (r *Replicator) ApplyPlacementFromRaft(p *Placement) {
 			r.clearMigrationSource(vnodeID)
 		}
 
-		log.Printf("[migration] epoch=%d->%d: completed transferring %d vnodes, gained %d vnodes, lost %d vnodes",
-			oldPl.Epoch, p.Epoch, gainedTransferred+replicaTransferred, gainedTransferred, len(lostVNodes))
-		if gainedFailures > 0 || replicaFailures > 0 || lostFailures > 0 {
-			log.Printf("[migration] epoch=%d->%d: transfer failures: gained=%d replica=%d lost=%d",
-				oldPl.Epoch, p.Epoch, gainedFailures, replicaFailures, lostFailures)
-		}
+		log.Printf("[migration] epoch=%d->%d complete: primary=%d via %s replica-sync=%d via %s lost=%d failures(gained=%d replica=%d lost=%d)",
+			oldPl.Epoch, p.Epoch,
+			gainedTransferred, formatVNodeCounts(gainedBySource),
+			replicaTransferred, formatVNodeCounts(replicaBySource),
+			len(lostVNodes), gainedFailures, replicaFailures, lostFailures)
 
 		// 3. Update replica set for changed vnodes
 		// (In future: may need to transfer to new replicas or notify old replicas)
-		log.Printf("[migration] processing %d vnodes with replica set changes", len(changedReplicas))
 	}()
 }
 
@@ -930,6 +934,23 @@ func formatVNodeCounts(counts map[string]int) string {
 		parts = append(parts, fmt.Sprintf("%s=%d", id, counts[id]))
 	}
 	return strings.Join(parts, ", ")
+}
+
+func formatUint16Sample(ids []uint16, limit int) string {
+	if len(ids) == 0 {
+		return "none"
+	}
+	if limit <= 0 || limit > len(ids) {
+		limit = len(ids)
+	}
+	parts := make([]string, 0, limit)
+	for i := 0; i < limit; i++ {
+		parts = append(parts, fmt.Sprintf("%d", ids[i]))
+	}
+	if limit < len(ids) {
+		return fmt.Sprintf("%s ... (+%d more)", strings.Join(parts, ","), len(ids)-limit)
+	}
+	return strings.Join(parts, ",")
 }
 
 func formatBoolNodeSet(nodes map[string]bool) string {
@@ -1381,7 +1402,6 @@ func (r *Replicator) transferVNodeFrom(sourceNodeID string, vnodeID uint16, epoc
 
 		// End-of-stream marker
 		if resp.EmptyEntries {
-			r.debugf("[transfer] received end-of-stream for vnode=%d", vnodeID)
 			break
 		}
 
@@ -1416,7 +1436,7 @@ func (r *Replicator) transferVNodeFrom(sourceNodeID string, vnodeID uint16, epoc
 		// TODO: Add per-vnode replay queue to reduce interleaving during high write pressure.
 	}
 
-	r.debugf("[transfer] applied %d entries for vnode=%d from %s", entriesReceived, vnodeID, sourceNodeID)
+	r.debugf("[transfer] vnode=%d from %s applied %d entries (%d bytes)", vnodeID, sourceNodeID, entriesReceived, bytesReceived)
 	result = "success"
 	return nil
 }
@@ -1426,6 +1446,13 @@ func (r *Replicator) IsLeader() bool {
 		return true
 	}
 	return r.Rf.IsLeader()
+}
+
+func (r *Replicator) LeaderAddr() string {
+	if r.Rf == nil {
+		return ""
+	}
+	return r.Rf.LeaderAddr()
 }
 
 func (r *Replicator) ReconcileRaftWithMembership(members []*memberlist.Node) error {

@@ -89,8 +89,10 @@ func (r *PlacementRouter) Close() error {
 
 	var firstErr error
 	if r.bootstrapConn != nil {
-		if err := r.bootstrapConn.Close(); err != nil && firstErr == nil {
-			firstErr = err
+		if err := r.bootstrapConn.Close(); err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
 		}
 		r.bootstrapConn = nil
 		r.bootstrapClient = nil
@@ -118,14 +120,23 @@ func (r *PlacementRouter) Refresh(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	state, err := client.GetClusterState(ctx, &emptypb.Empty{})
+	status, err := client.Status(ctx, &emptypb.Empty{})
 	if err != nil {
 		return err
 	}
+	state := status.GetState()
 	r.mu.Lock()
 	r.state = state
 	r.mu.Unlock()
 	return nil
+}
+
+func (r *PlacementRouter) Status(ctx context.Context) (*pb.ClusterStatus, error) {
+	client, err := r.bootstrapKVClient()
+	if err != nil {
+		return nil, err
+	}
+	return client.Status(ctx, &emptypb.Empty{})
 }
 
 func (r *PlacementRouter) bootstrapKVClient() (pb.KVClient, error) {
