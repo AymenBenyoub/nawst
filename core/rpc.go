@@ -699,6 +699,6 @@ func (s *Server) TransferVNode(stream pb.KV_TransferVNodeServer) error {
 	}
 
 	result = "ok"
-	log.Printf("[transfer] completed vnode=%d snapshot (%d entries)", vnodeID, len(snapshot.Entries))
+	// log.Printf("[transfer] completed vnode=%d snapshot (%d entries)", vnodeID, len(snapshot.Entries))
 	return nil
 }
