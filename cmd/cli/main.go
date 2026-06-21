@@ -147,15 +147,17 @@ func formatClusterStatus(status *pb.ClusterStatus) string {
 	nodes := state.GetNodes()
 	vnodes := state.GetVnodes()
 	primaryCounts := make(map[string]int, len(nodes))
-	replicaTargets := make(map[string]map[string]struct{}, len(nodes))
+	replicaVNodeCounts := make(map[string]map[string]int, len(nodes)) // primary -> replica -> vnode count
+
 	for _, node := range nodes {
 		if node == nil || node.GetId() == "" {
 			continue
 		}
-		if _, ok := replicaTargets[node.GetId()]; !ok {
-			replicaTargets[node.GetId()] = make(map[string]struct{})
+		if _, ok := replicaVNodeCounts[node.GetId()]; !ok {
+			replicaVNodeCounts[node.GetId()] = make(map[string]int)
 		}
 	}
+
 	for _, vnode := range vnodes {
 		if vnode == nil {
 			continue
@@ -163,12 +165,12 @@ func formatClusterStatus(status *pb.ClusterStatus) string {
 		primary := vnode.GetPrimary()
 		if primary != "" {
 			primaryCounts[primary]++
-			if _, ok := replicaTargets[primary]; !ok {
-				replicaTargets[primary] = make(map[string]struct{})
+			if _, ok := replicaVNodeCounts[primary]; !ok {
+				replicaVNodeCounts[primary] = make(map[string]int)
 			}
 			for _, replica := range vnode.GetReplicas() {
 				if replica != "" && replica != primary {
-					replicaTargets[primary][replica] = struct{}{}
+					replicaVNodeCounts[primary][replica]++
 				}
 			}
 		}
@@ -190,13 +192,29 @@ func formatClusterStatus(status *pb.ClusterStatus) string {
 		"Placement:",
 	}
 	for _, nodeID := range ids {
-		replicas := sortedReplicaTargets(replicaTargets[nodeID])
-		if len(replicas) == 0 {
-			replicas = "none"
+		replicaStr := sortedReplicaVNodeCounts(replicaVNodeCounts[nodeID])
+		if replicaStr == "" {
+			replicaStr = "none"
 		}
-		lines = append(lines, fmt.Sprintf("  %s: %d vnodes -> replicas: %s", nodeID, primaryCounts[nodeID], replicas))
+		lines = append(lines, fmt.Sprintf("  %s: %d vnodes (primary) -> replicas: %s", nodeID, primaryCounts[nodeID], replicaStr))
 	}
 	return strings.Join(lines, "\n")
+}
+
+func sortedReplicaVNodeCounts(counts map[string]int) string {
+	if len(counts) == 0 {
+		return ""
+	}
+	ids := make([]string, 0, len(counts))
+	for id := range counts {
+		ids = append(ids, id)
+	}
+	sort.Strings(ids)
+	parts := make([]string, 0, len(ids))
+	for _, id := range ids {
+		parts = append(parts, fmt.Sprintf("%s(%d)", id, counts[id]))
+	}
+	return strings.Join(parts, ", ")
 }
 
 func formatLeader(leader string) string {
